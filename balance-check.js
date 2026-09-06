@@ -51,7 +51,10 @@ function run(seed) {
     S.workers.forEach(w => { if (w.eta > 0 && (w.eta -= dt) <= 0) { w.at = w.to; w.to = null; } });
     if (S.repairT > 0 && cnt('gen') > 0 && (S.repairT -= dt) <= 0) S.broken = false;
 
-    const sup = genOut(), base = C.houseDraw + S.cold + S.pop * C.residentKW;
+    // index.html の baseDraw() と同じ式。夜の分を忘れると確認が空振りする
+    const night = (S.t % (C.dayLen + C.nightLen)) >= C.dayLen;
+    const sup = genOut(),
+          base = C.houseDraw + S.cold + S.pop * C.residentKW + (night ? C.nightDraw : 0);
     let avail = sup - base, farmLive = false, shopLive = false;
     const brown = avail < 0;
     if (!brown) {

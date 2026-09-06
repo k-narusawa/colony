@@ -47,6 +47,9 @@
   .cap::after{content:"供給上限";position:absolute;top:-15px;left:3px;font-size:10px;color:var(--ink);white-space:nowrap}
   .cap.r::after{left:auto;right:3px}   /* 右端に寄ったらラベルを内側へ返す */
   .over{background:repeating-linear-gradient(45deg,var(--rust),var(--rust) 5px,#8d3a22 5px,#8d3a22 10px)}
+  .phase{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:12px;
+         color:var(--soft);margin-top:9px}
+  .phase.warn{color:var(--ochre);font-weight:600} .phase.night{color:var(--rust)}
 
   /* --- 資源 --- */
   .res{display:grid;grid-template-columns:repeat(5,1fr);gap:1px;background:var(--line)}
@@ -135,7 +138,7 @@
 
 <div class="wrap">
   <h1>荒廃コロニー 稼働記録板</h1>
-  <p class="sub">10分の実測。電力の切り替えは即時、人員の着任には20秒かかります。</p>
+  <p class="sub">10分の実測。電力の切り替えは即時、人員の着任には20秒かかります。夜になると暖房で消費が上がります。</p>
 
   <div class="hud">
     <span class="clock" id="clock">10:00</span>
@@ -153,6 +156,7 @@
       <div class="pwrState" id="pState">安定</div>
     </div>
     <div class="bar" id="bar"><div class="cap" id="cap"></div></div>
+    <div class="phase" id="phase"></div>
   </div>
 
   <div id="ticker"></div>
@@ -213,6 +217,9 @@ const C = {
   shopDraw:3, shopSlots:4, shopPerLv:2, partsPerMan:.28, scrapPerPart:2,
   moveTime:20,          // 着任にかかる秒数(この遅延がマルチタスク感の正体)
   evMin:80, evVar:60,   // 突発事象の間隔
+  // 昼夜。夜は暖房で基礎消費が上がる。forecast は日没の何秒前に警告するかで、
+  // moveTime より長くしないと「予告を見てから人を動かす」が間に合わない
+  dayLen:70, nightLen:50, nightDraw:3, forecast:25,
   sessionSec:600
 };
 const UPS = [
@@ -230,7 +237,7 @@ let peakPop=5, brownSec=0, idleSec=0, totalParts=0;
 function init(){
   S = { t:0, pop:5, workers:[], food:C.foodCap, scrap:0, parts:0, deposit:3000, growth:0,
         farmOn:true, shopOn:true, lv:{gen:1,house:1,scrap:1,shop:1},
-        broken:false, repairT:0, cold:0, coldLeft:0, nextEv:70, log:[],
+        broken:false, repairT:0, cold:0, coldLeft:0, nextEv:70, log:[], _night:false,
         farmLive:false, shopLive:false, sup:0, dem:0, brown:false };
   for(let i=0;i<5;i++) S.workers.push({at:'idle', eta:0, to:null});
   log('発電機に整備員を送ると出力が上がる');
@@ -256,12 +263,17 @@ const popCap = () => C.popCapBase+(S.lv.house-1)*C.popCapPerLv;
 const isLive = k => k==='farm' ? S.farmLive : k==='shop' ? S.shopLive : true;
 const isOn   = k => k==='farm' ? S.farmOn   : S.shopOn;
 
+// 昼夜は状態を持たず S.t から出す(巻き戻しても矛盾しない)
+const CYCLE  = C.dayLen + C.nightLen;
+const isNight= () => (S.t % CYCLE) >= C.dayLen;
+const toNext = () => { const p=S.t % CYCLE; return p < C.dayLen ? C.dayLen-p : CYCLE-p; };
+
 function genOut(){
   const w = Math.min(cnt('gen'), C.genBase.length-1);
   const o = C.genBase[w] + (S.lv.gen-1)*C.genPerLv;
   return S.broken ? o*C.brokenMult : o;
 }
-const baseDraw = () => C.houseDraw + S.cold + S.pop*C.residentKW;
+const baseDraw = () => C.houseDraw + S.cold + S.pop*C.residentKW + (isNight()?C.nightDraw:0);
 
 function log(msg, cls){ S.log.unshift({id:++logSeq,t:S.t,msg,cls}); if(S.log.length>60) S.log.pop(); }
 const mmss = s => `${String(Math.floor(s/60)).padStart(2,'0')}:${String(Math.floor(Math.max(0,s)%60)).padStart(2,'0')}`;
@@ -284,6 +296,13 @@ function popNote(){
 // ============ 1ティック ============
 function step(dt){
   S.t += dt;
+
+  const night=isNight();
+  if(night!==S._night){
+    S._night=night;
+    log(night ? `日が落ちた。暖房で消費が +${C.nightDraw}kW` : '夜が明けた。消費が戻った',
+        night ? 'bad' : 'good');
+  }
 
   if(S.coldLeft>0){ S.coldLeft-=dt; if(S.coldLeft<=0){ S.cold=0; log('寒波が去った','good'); } }
 
@@ -401,6 +420,9 @@ function buildStatic(){
     <button data-up="${i}"></button></div>`).join('');
 
   $('alerts').innerHTML = `
+    <div class="alert" id="aNight" style="background:var(--ochre);display:none">
+      <span id="aNightN"></span>
+    </div>
     <div class="alert" id="aBroken" style="display:none">
       <span>発電機が故障している。出力が半減中 <span class="num" id="aRep"></span></span>
       <button id="repBtn">修理する(部品30)</button>
@@ -443,6 +465,12 @@ function drawBar(){
   if(S.brown){ setText(st,'停電'); st.style.color='var(--rust)'; }
   else { setText(st,`空き ${spare.toFixed(1)}kW`);
          st.style.color = spare<1 ? 'var(--ochre)' : 'var(--copper)'; }
+
+  const el=$('phase'), night=isNight(), left=Math.ceil(toNext());
+  setText(el, night ? `夜 — 暖房で +${C.nightDraw}kW / 明けるまで ${left}秒`
+                    : `昼 — 夜まで ${left}秒`);
+  const cls = night ? 'phase night' : left<=C.forecast ? 'phase warn' : 'phase';
+  if(el.className!==cls) el.className=cls;
 }
 
 function drawBuildings(){
@@ -501,6 +529,12 @@ function drawUps(){
 }
 
 function drawAlerts(){
+  // 日没予告。人を動かすには moveTime かかるので、気づいた時点で間に合う必要がある
+  const left=Math.ceil(toNext()), warn=!isNight() && left<=C.forecast;
+  $('aNight').style.display = warn?'flex':'none';
+  if(warn) setText($('aNightN'),
+    `まもなく日没。${left}秒後に基礎消費が +${C.nightDraw}kW になる`);
+
   $('aBroken').style.display = S.broken?'flex':'none';
   if(S.broken){
     setText($('aRep'), S.repairT>0
