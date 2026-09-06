@@ -220,6 +220,10 @@ const C = {
   // 昼夜。夜は暖房で基礎消費が上がる。forecast は日没の何秒前に警告するかで、
   // moveTime より長くしないと「予告を見てから人を動かす」が間に合わない
   dayLen:70, nightLen:50, nightDraw:3, forecast:25,
+  // 破綻の帰結。どちらも「放っておいた時間」で測るので、一瞬の失敗では起きない
+  starveKill:60,   // 食料ゼロがこれだけ続くと住民を1人失う
+  brownBreak:45,   // 停電がこれだけ続くと発電機が焼ける(既存の故障状態を使い回す)
+  foodWarn:60,     // 食料が尽きるまでこれを切ったら警告する
   sessionSec:600
 };
 const UPS = [
@@ -232,12 +236,13 @@ const ORDER = ['gen','scrap','farm','shop'];
 
 // ============ 状態 ============
 let S, running=false, speed=2, realLeft=C.sessionSec, lastMs=0, logSeq=0;
-let peakPop=5, brownSec=0, idleSec=0, totalParts=0;
+let peakPop=5, brownSec=0, idleSec=0, totalParts=0, deaths=0;
 
 function init(){
   S = { t:0, pop:5, workers:[], food:C.foodCap, scrap:0, parts:0, deposit:3000, growth:0,
         farmOn:true, shopOn:true, lv:{gen:1,house:1,scrap:1,shop:1},
         broken:false, repairT:0, cold:0, coldLeft:0, nextEv:70, log:[], _night:false,
+        starveT:0, brownT:0,
         farmLive:false, shopLive:false, sup:0, dem:0, brown:false };
   for(let i=0;i<5;i++) S.workers.push({at:'idle', eta:0, to:null});
   log('発電機に整備員を送ると出力が上がる');
@@ -327,7 +332,13 @@ function step(dt){
   S._shed = shed;
   if(S.brown && !S._brown) log('停電。基礎負荷すら賄えていない','bad');
   S._brown = S.brown;
-  if(S.brown) brownSec += dt;
+  if(S.brown){
+    brownSec += dt; S.brownT += dt;
+    if(S.brownT>=C.brownBreak && !S.broken){
+      S.broken=true; S.repairT=0; S.brownT=0;
+      log('停電が続いて発電機が焼けた。出力が半減','bad');
+    }
+  } else S.brownT=0;   // 一瞬の停電では壊れない。続いたときだけ
 
   S.sup=sup;
   S.dem=base+(S.farmLive?C.farmDraw:0)+(S.shopLive?C.shopDraw:0);
@@ -349,6 +360,17 @@ function step(dt){
   S.food=Math.max(0, Math.min(C.foodCap, S.food+((S.farmLive?C.foodOut:0)-S.pop*C.foodPerPop)*dt));
   if(S.food<=0 && !S._starve){ log('食料が尽きた。作業速度が落ちる','bad'); S._starve=true; }
   if(S.food>0) S._starve=false;
+
+  // ponytail: 最後の1人は残す。全滅を入れるとゲームオーバー画面が要る
+  if(S.food<=0){
+    S.starveT+=dt;
+    if(S.starveT>=C.starveKill && S.pop>1){
+      S.starveT=0; S.pop--; S.growth=0; deaths++;
+      const i=S.workers.findIndex(w=>w.at==='idle'&&w.eta<=0);
+      S.workers.splice(i>=0?i:0,1);   // 待機者から先に失う
+      log(`住民が1人餓死した(残り ${S.pop}人)`,'bad');
+    }
+  } else S.starveT=0;
 
   if(S.food>=C.growthMin){
     S.growth+=dt;
@@ -426,6 +448,9 @@ function buildStatic(){
     <div class="alert" id="aBroken" style="display:none">
       <span>発電機が故障している。出力が半減中 <span class="num" id="aRep"></span></span>
       <button id="repBtn">修理する(部品30)</button>
+    </div>
+    <div class="alert" id="aFood" style="display:none">
+      <span id="aFoodN"></span>
     </div>
     <div class="alert" id="aIdle" style="background:var(--ochre);display:none">
       <span><span id="aIdleN"></span>人が待機したままになっている</span>
@@ -542,6 +567,14 @@ function drawAlerts(){
     $('repBtn').style.display = S.repairT>0?'none':'';
     setDis($('repBtn'), S.parts<30);
   }
+  // 食料のレート表示に帰結を結びつける。放置すると住民を失う
+  const fr=rates().food;
+  const empty = S.food<=0, soon = fr<0 && S.food/-fr<=C.foodWarn;
+  $('aFood').style.display = (empty||soon)?'flex':'none';
+  if(empty||soon) setText($('aFoodN'), empty
+    ? `食料が尽きている。${Math.ceil(C.starveKill-S.starveT)}秒後に住民を1人失う`
+    : `食料があと ${Math.ceil(S.food/-fr)}秒で尽きる`);
+
   const n=idle();
   $('aIdle').style.display = n>0?'flex':'none';
   if(n>0) setText($('aIdleN'),String(n));
@@ -613,6 +646,7 @@ function finish(){
       <li>部品 累計 ${Math.floor(totalParts)} / 強化 ${Object.values(S.lv).reduce((a,b)=>a+b,0)-4}回</li>
       <li>停電していた時間 ${Math.round(brownSec)}秒</li>
       <li>誰かを待機させたままだった時間 ${Math.round(idleSec)}秒</li>
+      <li>${deaths?`餓死させた住民 ${deaths}人`:'餓死者なし'}</li>
     </ul>
     <p style="font-size:13px;color:var(--soft);margin:0">
       待機を放置した時間が長いほど、手が回っていなかったことになります。</p>`;
