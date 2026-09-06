@@ -45,13 +45,18 @@
   .s-base{background:var(--soft)} .s-farm{background:var(--ochre)} .s-shop{background:var(--copper)}
   .cap{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--ink)}
   .cap::after{content:"供給上限";position:absolute;top:-15px;left:3px;font-size:10px;color:var(--ink);white-space:nowrap}
+  .cap.r::after{left:auto;right:3px}   /* 右端に寄ったらラベルを内側へ返す */
   .over{background:repeating-linear-gradient(45deg,var(--rust),var(--rust) 5px,#8d3a22 5px,#8d3a22 10px)}
 
   /* --- 資源 --- */
   .res{display:grid;grid-template-columns:repeat(5,1fr);gap:1px;background:var(--line)}
   .res div{background:var(--paper);padding:8px 6px;text-align:center}
-  .res b{display:block;font-family:var(--mono);font-size:19px;font-weight:500}
+  .res b{display:block;font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:19px;font-weight:500}
   .res span{font-size:11px;color:var(--soft)}
+  /* 増減レート。空のときも高さを確保して行が跳ねないようにする */
+  .res i{display:block;font-style:normal;font-size:10.5px;font-family:var(--mono);
+         font-variant-numeric:tabular-nums;color:var(--soft);min-height:1.45em;margin-top:2px}
+  .res i.up{color:var(--copper)} .res i.dn{color:var(--rust)}
 
   /* --- 建物ロースター --- */
   .bld{border-top:1px solid var(--line);padding:11px 0;display:grid;
@@ -62,16 +67,18 @@
   .slots{display:flex;gap:4px;margin-top:6px;flex-wrap:wrap}
   .slot{width:22px;height:26px;border:1px solid var(--line);background:var(--paper-2);
         display:flex;align-items:center;justify-content:center;font-size:10px;
-        font-family:var(--mono);color:var(--soft)}
+        font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--soft)}
   .slot.on{background:var(--ochre);border-color:var(--ochre);color:#fff}
-  .slot.move{background:repeating-linear-gradient(45deg,#d3c9ab,#d3c9ab 3px,var(--paper-2) 3px,var(--paper-2) 6px);
-             color:var(--ink)}
+  /* 着任の進捗は下から塗る。塗り自体は drawBuildings がインラインで入れる */
+  .slot.move{color:var(--ink);border-color:var(--ochre)}
   .ctl{display:flex;gap:5px;align-items:center}
   button{font-family:inherit;font-size:14px;background:var(--paper-2);border:1px solid var(--line);
          color:var(--ink);padding:6px 11px;cursor:pointer;
          touch-action:manipulation;           /* ダブルタップ拡大を抑える */
          -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
   button:hover:not(:disabled){background:var(--ink);color:var(--paper)}
+  button:active:not(:disabled){background:var(--ink);color:var(--paper);transform:translateY(1px)}
+  button[aria-pressed="true"]{background:var(--ink);color:var(--paper);border-color:var(--ink)}
   button:disabled{opacity:.32;cursor:not-allowed}
   button:focus-visible{outline:2px solid var(--rust);outline-offset:2px}
   .tog{min-width:86px;font-size:13px}
@@ -99,7 +106,13 @@
   #log .t{color:var(--soft)} #log .bad{color:var(--rust)} #log .good{color:var(--copper)}
 
   .hud{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
-  .clock{font-family:var(--mono);font-size:23px;font-weight:500;min-width:78px}
+  .clock{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:23px;font-weight:500;min-width:78px}
+  .clock.warn{color:var(--rust)}
+  /* 直近の出来事。記録パネルはスマホだと最下部にあって見えない */
+  #ticker{font-family:var(--mono);font-size:12px;color:var(--soft);padding:5px 2px;
+          margin-bottom:12px;border-bottom:1px solid var(--line);
+          white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #ticker.bad{color:var(--rust)} #ticker.good{color:var(--copper)}
   .cols{display:grid;grid-template-columns:1fr;gap:12px}
   @media(min-width:760px){ .cols{grid-template-columns:1.35fr 1fr} }
   /* 実機は指で連打するので、押す的を大きくする */
@@ -127,13 +140,12 @@
   <div class="hud">
     <span class="clock" id="clock">10:00</span>
     <button id="playBtn">開始</button>
-    <button data-sp="1">等速</button>
-    <button data-sp="2">2倍速</button>
-    <button data-sp="4">4倍速</button>
-    <span class="num" style="color:var(--soft);font-size:13px" id="spLabel">2倍速</span>
+    <button data-sp="1" aria-pressed="false">等速</button>
+    <button data-sp="2" aria-pressed="true">2倍速</button>
+    <button data-sp="4" aria-pressed="false">4倍速</button>
   </div>
 
-  <div id="alerts"></div>
+  <div id="alerts" aria-live="polite"></div>
 
   <div class="panel" id="powerPanel">
     <div class="pwrTop">
@@ -143,12 +155,14 @@
     <div class="bar" id="bar"><div class="cap" id="cap"></div></div>
   </div>
 
+  <div id="ticker"></div>
+
   <div class="res panel" style="padding:0">
-    <div><b id="rPop">5</b><span>住民</span></div>
-    <div><b id="rFood">200</b><span>食料</span></div>
-    <div><b id="rScrap">0</b><span>スクラップ</span></div>
-    <div><b id="rParts">0</b><span>部品</span></div>
-    <div><b id="rDep">3000</b><span>埋蔵量</span></div>
+    <div><b id="rPop">5</b><span>住民</span><i id="qPop"></i></div>
+    <div><b id="rFood">200</b><span>食料</span><i id="qFood"></i></div>
+    <div><b id="rScrap">0</b><span>スクラップ</span><i id="qScrap"></i></div>
+    <div><b id="rParts">0</b><span>部品</span><i id="qParts"></i></div>
+    <div><b id="rDep">3000</b><span>埋蔵量</span><i id="qDep"></i></div>
   </div>
 
   <div class="cols">
@@ -210,7 +224,7 @@ const UPS = [
 const ORDER = ['gen','scrap','farm','shop'];
 
 // ============ 状態 ============
-let S, running=false, speed=2, realLeft=C.sessionSec, lastMs=0;
+let S, running=false, speed=2, realLeft=C.sessionSec, lastMs=0, logSeq=0;
 let peakPop=5, brownSec=0, idleSec=0, totalParts=0;
 
 function init(){
@@ -249,8 +263,23 @@ function genOut(){
 }
 const baseDraw = () => C.houseDraw + S.cold + S.pop*C.residentKW;
 
-function log(msg, cls){ S.log.unshift({t:S.t,msg,cls}); if(S.log.length>60) S.log.pop(); }
+function log(msg, cls){ S.log.unshift({id:++logSeq,t:S.t,msg,cls}); if(S.log.length>60) S.log.pop(); }
 const mmss = s => `${String(Math.floor(s/60)).padStart(2,'0')}:${String(Math.floor(Math.max(0,s)%60)).padStart(2,'0')}`;
+
+// step() と同じ式。表示だけなので dt を掛けず毎秒あたりで返す
+function rates(){
+  const m=mult();
+  const scr = (S.brown||S.deposit<=0) ? 0 : cnt('scrap')*C.scrapPerMan*m;
+  const prt = S.shopLive ? Math.min(cnt('shop')*C.partsPerMan*m, S.scrap/C.scrapPerPart) : 0;
+  return { food:(S.farmLive?C.foodOut:0)-S.pop*C.foodPerPop,
+           scrap:scr-prt*C.scrapPerPart, parts:prt, dep:-scr };
+}
+// 住民はレートより「次の1人まで何秒か」のほうが読める
+function popNote(){
+  if(S.pop>=popCap())      return '上限';
+  if(S.food<C.growthMin)   return '食料不足で停止';
+  return `次 ${Math.ceil(C.growthNeed-S.growth)}秒`;
+}
 
 // ============ 1ティック ============
 function step(dt){
@@ -378,6 +407,10 @@ function buildStatic(){
     </div>
     <div class="alert" id="aIdle" style="background:var(--ochre);display:none">
       <span><span id="aIdleN"></span>人が待機したままになっている</span>
+    </div>
+    <div class="alert" id="aUp" style="background:var(--copper);display:none">
+      <span><span id="aUpN"></span></span>
+      <button id="aUpBtn" data-buy="0">強化する</button>
     </div>`;
 
   ORDER.forEach(k=>{
@@ -401,7 +434,7 @@ function drawBar(){
   if(S.farmLive) segs.push(['s-farm',C.farmDraw,'農場']);
   if(S.shopLive) segs.push(['s-shop',C.shopDraw,'工房']);
   if(S.brown)    segs.push(['over',base-sup,'不足']);
-  $('bar').innerHTML=`<div class="cap" style="left:${pct(sup)}"></div>`+
+  $('bar').innerHTML=`<div class="cap${sup/scale>.8?' r':''}" style="left:${pct(sup)}"></div>`+
     segs.filter(s=>s[1]>0).map(([c,v,l])=>`<div class="seg ${c}" style="width:${pct(v)}">${l}</div>`).join('');
 
   setText($('pDem'),S.dem.toFixed(1));
@@ -415,32 +448,45 @@ function drawBar(){
 function drawBuildings(){
   ORDER.forEach(k=>{
     const b=B[k], r=R[k], n=b.slots();
-    let note=b.note(), tag='', col='var(--rust)';
-    if(b.tog && !isOn(k)){ tag=' 遮断中'; col='var(--ochre)'; }
-    else if(b.tog && !isLive(k) && !S.brown){
-      const need = k==='farm'?C.farmDraw:C.shopDraw;
-      const free = k==='farm'?S.freeFarm:S.freeShop;
-      tag=' 電力不足'; note += ` / あと ${Math.max(0,need-free).toFixed(1)}kW 足りない`;
-    } else if(b.tog && S.brown){ tag=' 停電'; }
+    // 遮断中はトグルボタン自身が状態を持つので、ここでは出さない
+    let note=b.note(), tag='';
+    if(b.tog && isOn(k)){
+      if(S.brown) tag=' 停電';
+      else if(k==='shop' && cnt('shop')===0) tag=' 人員なし';
+      else if(!isLive(k)){
+        const need = k==='farm'?C.farmDraw:C.shopDraw;
+        const free = k==='farm'?S.freeFarm:S.freeShop;
+        tag=' 電力不足'; note += ` / あと ${Math.max(0,need-free).toFixed(1)}kW 足りない`;
+      }
+    }
     setText(r.meta,note);
-    setText(r.off,tag); r.off.style.color=col; r.off.style.fontSize='12px';
+    setText(r.off,tag); r.off.style.color='var(--rust)'; r.off.style.fontSize='12px';
 
     if(r.n!==n){ r.slots.innerHTML=Array.from({length:n},()=>'<div class="slot"></div>').join(''); r.n=n; }
     const here=cnt(k), mv=S.workers.filter(w=>w.to===k).sort((a,b)=>a.eta-b.eta);
     Array.from(r.slots.children).forEach((el,i)=>{
-      let cls='slot', txt='';
+      let cls='slot', txt='', bg='';
       if(i<here){ cls='slot on'; txt='●'; }
-      else if(i-here<mv.length){ cls='slot move'; txt=String(Math.ceil(mv[i-here].eta)); }
+      else if(i-here<mv.length){
+        const eta=mv[i-here].eta, p=Math.round((1-eta/C.moveTime)*100);
+        cls='slot move'; txt=String(Math.ceil(eta));
+        bg=`linear-gradient(to top,var(--ochre) ${p}%,var(--paper-2) ${p}%)`;
+      }
       if(el.className!==cls) el.className=cls;
+      el.style.background=bg;
       setText(el,txt);
     });
 
     if(r.tog){
       if(r.tog.className!=='tog') r.tog.className='tog';
-      setText(r.tog, isOn(k)?'遮断する':'通電する');
+      r.tog.setAttribute('aria-pressed', String(isOn(k)));
+      setText(r.tog, isOn(k)?'通電中':'遮断中');
     }
     if(r.as){
-      setDis(r.as, idle()===0 || here+moving(k)>=n);
+      // 満杯なのか待機者がいないのかを区別できるようにする
+      const full = here+moving(k)>=n;
+      setText(r.as, full?'満':'＋');
+      setDis(r.as, full || idle()===0);
       setDis(r.un, here+moving(k)===0);
     }
   });
@@ -465,19 +511,55 @@ function drawAlerts(){
   const n=idle();
   $('aIdle').style.display = n>0?'flex':'none';
   if(n>0) setText($('aIdleN'),String(n));
+
+  // 強化パネルはスマホだと最下部。買えるようになったことをここで伝える
+  const aff = UPS.map((u,i)=>({u,i})).filter(o=>S.parts>=o.u.cost)
+                 .sort((a,b)=>a.u.cost-b.u.cost)[0];
+  $('aUp').style.display = aff?'flex':'none';
+  if(aff){
+    setText($('aUpN'), `${aff.u.n} Lv${S.lv[aff.u.k]+1}(${aff.u.d})に手が届く / 部品 ${aff.u.cost}`);
+    $('aUpBtn').dataset.buy = String(aff.i);
+  }
+}
+
+function setRate(id,v,txt){
+  const el=$(id);
+  setText(el, txt!==undefined ? txt : (v>0?'+':'')+v.toFixed(1)+'/秒');
+  const cls = txt!==undefined ? '' : v>0.001 ? 'up' : v<-0.001 ? 'dn' : '';
+  if(el.className!==cls) el.className=cls;
+}
+
+function drawLog(){
+  const lg=$('log'), newest=S.log[0];
+  if(!newest || +lg.dataset.top===newest.id) return;
+  const top=+lg.dataset.top||0;
+  // 先頭に足すだけにする。全書き換えだとスクロール位置と選択が飛ぶ
+  S.log.filter(l=>l.id>top).reverse().forEach(l=>lg.insertAdjacentHTML('afterbegin',
+    `<div><span class="t">[${mmss(l.t)}]</span> <span class="${l.cls||''}">${l.msg}</span></div>`));
+  lg.dataset.top=newest.id;
+  while(lg.children.length>60) lg.removeChild(lg.lastChild);
+  setText($('ticker'),`[${mmss(newest.t)}] ${newest.msg}`);
+  $('ticker').className = newest.cls||'';
 }
 
 function draw(){
   drawBar(); drawBuildings(); drawUps(); drawAlerts();
+  const q=rates();
   setText($('rPop'),`${S.pop}/${popCap()}`);
+  setRate('qPop',0,popNote());
   setText($('rFood'),String(Math.floor(S.food)));
+  setRate('qFood',q.food, S.food>=C.foodCap&&q.food>0 ? '満タン' : undefined);
   setText($('rScrap'),String(Math.floor(S.scrap)));
+  setRate('qScrap',q.scrap);
   setText($('rParts'),String(Math.floor(S.parts)));
+  setRate('qParts',q.parts);
   setText($('rDep'),String(Math.floor(S.deposit)));
+  setRate('qDep',q.dep, S.deposit<=0 ? '枯渇' : undefined);
   setText($('idleN'),String(idle()));
   setText($('clock'),mmss(realLeft));
-  const html=S.log.map(l=>`<div><span class="t">[${mmss(l.t)}]</span> <span class="${l.cls||''}">${l.msg}</span></div>`).join('');
-  if($('log').innerHTML!==html) $('log').innerHTML=html;
+  const ck = realLeft<=60 ? 'clock warn' : 'clock';
+  if($('clock').className!==ck) $('clock').className=ck;
+  drawLog();
 }
 
 // ============ ループ ============
@@ -511,7 +593,10 @@ document.addEventListener('pointerdown', e=>{
   if(t.dataset.un)  unassign(t.dataset.un);
   if(t.dataset.tog){ if(t.dataset.tog==='farm') S.farmOn=!S.farmOn; else S.shopOn=!S.shopOn; }
   if(t.dataset.up)  buy(+t.dataset.up);
-  if(t.dataset.sp){ speed=+t.dataset.sp; setText($('spLabel'),t.textContent); }
+  if(t.dataset.buy) buy(+t.dataset.buy);
+  if(t.dataset.sp){ speed=+t.dataset.sp;
+    document.querySelectorAll('[data-sp]').forEach(b=>
+      b.setAttribute('aria-pressed', String(+b.dataset.sp===speed))); }
   if(t.id==='repBtn'){ repair(); }
   if(t.id==='playBtn'){ running=!running; t.textContent=running?'一時停止':'再開'; }
   draw();
