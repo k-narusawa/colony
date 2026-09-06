@@ -72,6 +72,7 @@
         display:flex;align-items:center;justify-content:center;font-size:10px;
         font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--soft)}
   .slot.on{background:var(--ochre);border-color:var(--ochre);color:#fff}
+  .slot.sub{border-color:var(--ochre);color:var(--ochre)}   /* 不適任 */
   /* 着任の進捗は下から塗る。塗り自体は drawBuildings がインラインで入れる */
   .slot.move{color:var(--ink);border-color:var(--ochre)}
   .ctl{display:flex;gap:5px;align-items:center}
@@ -86,9 +87,16 @@
   button:focus-visible{outline:2px solid var(--rust);outline-offset:2px}
   .tog{min-width:86px;font-size:13px}
 
-  .idlebar{display:flex;align-items:center;gap:9px;padding:9px 11px;background:var(--paper-2);
+  .idlebar{padding:9px 11px;background:var(--paper-2);
            border:1px dashed var(--line);margin-bottom:11px}
+  .idleTop{display:flex;align-items:center;gap:9px}
+  .idleTop .hint{margin-left:auto;font-size:12px;color:var(--soft)}
   .idlebar b{font-family:var(--mono);font-size:19px}
+  .who{display:inline-block;font-size:11px;font-family:var(--mono);background:var(--paper);
+       border:1px solid var(--line);padding:1px 6px;margin:5px 4px 0 0}
+  .who.gen{border-color:var(--rust);color:var(--rust)}
+  .who.scrap{border-color:var(--ochre);color:var(--ochre)}
+  .who.shop{border-color:var(--copper);color:var(--copper)}
 
   /* --- 強化 --- */
   .ups{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
@@ -174,8 +182,11 @@
       <div class="panel">
         <h2>人員配置</h2>
         <div class="idlebar">
-          <b id="idleN">5</b><span>人が待機中</span>
-          <span style="margin-left:auto;font-size:12px;color:var(--soft)">配置を外すのは即時</span>
+          <div class="idleTop">
+            <b id="idleN">5</b><span>人が待機中</span>
+            <span class="hint">配置を外すのは即時</span>
+          </div>
+          <div id="idleList"></div>
         </div>
         <div id="blds"></div>
       </div>
@@ -224,6 +235,11 @@ const C = {
   starveKill:60,   // 食料ゼロがこれだけ続くと住民を1人失う
   brownBreak:45,   // 停電がこれだけ続くと発電機が焼ける(既存の故障状態を使い回す)
   foodWarn:60,     // 食料が尽きるまでこれを切ったら警告する
+  // 得意分野。適任を「等倍」に置き、外したぶんだけ目減りさせる(上振れは作らない)。
+  // 発電機の kW だけは頭数のままにしてある。出力は farmDraw との閾値比較を通るので、
+  // ここに得意分野の揺れを入れると農場が生き死にする崖になってしまう。
+  // 整備の腕は代わりに修理速度へ効かせる(こちらは閾値を持たない)
+  specMatch:1, specMiss:.6,
   sessionSec:600
 };
 const UPS = [
@@ -233,6 +249,20 @@ const UPS = [
   {k:'shop',  n:'工房',    d:'人員枠 +2',   cost:200},
 ];
 const ORDER = ['gen','scrap','farm','shop'];
+
+// ============ 住民 ============
+const SPECS = ['gen','scrap','shop'];
+const SPEC  = {gen:'整備', scrap:'解体', shop:'工作'};
+const NAMES = ['アオイ','カエデ','サキ','タチバナ','ナオ','ハル','ミサキ','ユウ',
+               'リン','イズミ','クルミ','セイ','トウマ','ノゾミ','ヒカリ','マコト'];
+let namePool = [];
+function nextName(){
+  if(!namePool.length) namePool = NAMES.slice().sort(()=>Math.random()-.5);
+  return namePool.pop();
+}
+const mkWorker = () => ({ name:nextName(), spec:SPECS[Math.floor(Math.random()*SPECS.length)],
+                          at:'idle', eta:0, to:null });
+const who = w => `${w.name}(${SPEC[w.spec]})`;
 
 // ============ 状態 ============
 let S, running=false, speed=2, realLeft=C.sessionSec, lastMs=0, logSeq=0;
@@ -244,23 +274,34 @@ function init(){
         broken:false, repairT:0, cold:0, coldLeft:0, nextEv:70, log:[], _night:false,
         starveT:0, brownT:0,
         farmLive:false, shopLive:false, sup:0, dem:0, brown:false };
-  for(let i=0;i<5;i++) S.workers.push({at:'idle', eta:0, to:null});
-  log('発電機に整備員を送ると出力が上がる');
+  namePool=[];
+  // 初期メンバーは3分野を1人ずつ保証する。整備が誰もいない引きは
+  // 挑戦ではなく詰みになるので、そこだけ運から外す
+  for(let i=0;i<5;i++){
+    const w=mkWorker();
+    if(i<SPECS.length) w.spec=SPECS[i];
+    S.workers.push(w);
+  }
+  log('得意分野に合った持ち場ほどよく働く。＋は適任を自動で選ぶ');
 }
 init();
 
 const B = {
   gen:  {name:'発電機',   slots:()=>3, tog:false,
-         note:()=>`整備 ${cnt('gen')}人 → 出力 ${genOut().toFixed(1)}kW`},
+         note:()=>`整備 ${cnt('gen')}人 → 出力 ${genOut().toFixed(1)}kW`
+                + (S.broken?` / 修理速度 ${eff('gen').toFixed(1)}倍`:'')},
   scrap:{name:'解体場',   slots:()=>C.scrapSlots+(S.lv.scrap-1)*C.scrapPerLv, tog:false,
-         note:()=>`電力不要 / スクラップ ${(cnt('scrap')*C.scrapPerMan*mult()).toFixed(1)}/秒`},
+         note:()=>`電力不要 / スクラップ ${(eff('scrap')*C.scrapPerMan*mult()).toFixed(1)}/秒`},
   farm: {name:'水耕農場', slots:()=>0, tog:true,
          note:()=>`${C.farmDraw}kW / 人手不要 / 食料 ${C.foodOut.toFixed(1)}/秒`},
   shop: {name:'工房',     slots:()=>C.shopSlots+(S.lv.shop-1)*C.shopPerLv, tog:true,
-         note:()=>`${C.shopDraw}kW / 部品 ${(cnt('shop')*C.partsPerMan*mult()).toFixed(2)}/秒`},
+         note:()=>`${C.shopDraw}kW / 部品 ${(eff('shop')*C.partsPerMan*mult()).toFixed(2)}/秒`},
 };
 
-const cnt    = k => S.workers.filter(w=>w.at===k && w.eta<=0).length;
+const at     = k => S.workers.filter(w=>w.at===k && w.eta<=0);
+const cnt    = k => at(k).length;                       // 頭数(枠の判定とUI用)
+const wMul   = (w,k) => w.spec===k ? C.specMatch : C.specMiss;
+const eff    = k => at(k).reduce((a,w)=>a+wMul(w,k),0); // 重み付き(生産量用)
 const moving = k => S.workers.filter(w=>w.to===k).length;
 const idle   = () => S.workers.filter(w=>w.at==='idle' && w.eta<=0).length;
 const mult   = () => S.food<=0 ? C.starveMult : 1;
@@ -286,8 +327,8 @@ const mmss = s => `${String(Math.floor(s/60)).padStart(2,'0')}:${String(Math.flo
 // step() と同じ式。表示だけなので dt を掛けず毎秒あたりで返す
 function rates(){
   const m=mult();
-  const scr = (S.brown||S.deposit<=0) ? 0 : cnt('scrap')*C.scrapPerMan*m;
-  const prt = S.shopLive ? Math.min(cnt('shop')*C.partsPerMan*m, S.scrap/C.scrapPerPart) : 0;
+  const scr = (S.brown||S.deposit<=0) ? 0 : eff('scrap')*C.scrapPerMan*m;
+  const prt = S.shopLive ? Math.min(eff('shop')*C.partsPerMan*m, S.scrap/C.scrapPerPart) : 0;
   return { food:(S.farmLive?C.foodOut:0)-S.pop*C.foodPerPop,
            scrap:scr-prt*C.scrapPerPart, parts:prt, dep:-scr };
 }
@@ -314,7 +355,7 @@ function step(dt){
   S.workers.forEach(w=>{ if(w.eta>0){ w.eta-=dt; if(w.eta<=0){ w.at=w.to; w.to=null; } } });
 
   if(S.repairT>0 && cnt('gen')>0){
-    S.repairT -= dt;
+    S.repairT -= dt*eff('gen');   // 整備が得意なほど早く直る。人数を足しても早くなる
     if(S.repairT<=0){ S.broken=false; log('発電機を復旧した','good'); }
   }
 
@@ -347,12 +388,12 @@ function step(dt){
 
   const m=mult();
   if(!S.brown){
-    const got=Math.min(S.deposit, cnt('scrap')*C.scrapPerMan*m*dt);
+    const got=Math.min(S.deposit, eff('scrap')*C.scrapPerMan*m*dt);
     S.deposit-=got; S.scrap+=got;
     if(S.deposit<=0 && !S._dep){ log('廃墟を掘り尽くした','bad'); S._dep=true; }
   }
   if(S.shopLive){
-    let want=cnt('shop')*C.partsPerMan*m*dt, need=want*C.scrapPerPart;
+    let want=eff('shop')*C.partsPerMan*m*dt, need=want*C.scrapPerPart;
     if(S.scrap<need){ want=S.scrap/C.scrapPerPart; need=S.scrap; }
     S.scrap-=need; S.parts+=want; totalParts+=want;
   }
@@ -367,17 +408,18 @@ function step(dt){
     if(S.starveT>=C.starveKill && S.pop>1){
       S.starveT=0; S.pop--; S.growth=0; deaths++;
       const i=S.workers.findIndex(w=>w.at==='idle'&&w.eta<=0);
-      S.workers.splice(i>=0?i:0,1);   // 待機者から先に失う
-      log(`住民が1人餓死した(残り ${S.pop}人)`,'bad');
+      const [lost]=S.workers.splice(i>=0?i:0,1);   // 待機者から先に失う
+      log(`${who(lost)}が餓死した(残り ${S.pop}人)`,'bad');
     }
   } else S.starveT=0;
 
   if(S.food>=C.growthMin){
     S.growth+=dt;
     if(S.growth>=C.growthNeed && S.pop<popCap()){
-      S.growth=0; S.pop++; S.workers.push({at:'idle',eta:0,to:null});
+      S.growth=0; S.pop++;
+      const w=mkWorker(); S.workers.push(w);
       peakPop=Math.max(peakPop,S.pop);
-      log(`住民が1人増えた(${S.pop}人)。待機に加わった`);
+      log(`${who(w)}が待機に加わった(${S.pop}人)`);
     }
   }
   if(idle()>0) idleSec+=dt;
@@ -393,19 +435,25 @@ function fireEvent(){
     case 'break':   S.broken=true; S.repairT=0; log('発電機が故障した。出力が半減','bad'); break;
     case 'cold':    S.cold=3; S.coldLeft=120; log('寒波。居住区の消費が +3kW','bad'); break;
     case 'ruin':    S.deposit+=1200; S._dep=false; log('新しい廃墟を見つけた。埋蔵量 +1200','good'); break;
-    case 'migrant': S.pop+=2; S.workers.push({at:'idle',eta:0,to:null},{at:'idle',eta:0,to:null});
-                    peakPop=Math.max(peakPop,S.pop); log('移民が2人到着した'); break;
+    case 'migrant': { S.pop+=2;
+                    const a=mkWorker(), b=mkWorker(); S.workers.push(a,b);
+                    peakPop=Math.max(peakPop,S.pop);
+                    log(`移民が到着した — ${who(a)} と ${who(b)}`); break; }
   }
 }
 
 // ============ 操作 ============
+// ponytail: 誰を送るかは自動で決める。手で選ばせるUIは実機で不満が出てから
 function assign(k){
-  const w=S.workers.find(w=>w.at==='idle'&&w.eta<=0);
-  if(!w || cnt(k)+moving(k)>=B[k].slots()) return;
+  const pool=at('idle');
+  if(!pool.length || cnt(k)+moving(k)>=B[k].slots()) return;
+  const w = pool.find(w=>w.spec===k) || pool[0];   // 適任がいれば優先
   w.at='moving'; w.to=k; w.eta=C.moveTime;
 }
 function unassign(k){
-  const w = S.workers.find(w=>w.to===k) || S.workers.find(w=>w.at===k&&w.eta<=0);
+  const worst = a => a.find(w=>w.spec!==k) || a[0];   // 不適任から先に外す
+  const mv=S.workers.filter(w=>w.to===k), here=at(k);
+  const w = mv.length ? worst(mv) : here.length ? worst(here) : null;
   if(!w) return;
   w.at='idle'; w.to=null; w.eta=0;   // 離脱は即時
 }
@@ -516,16 +564,20 @@ function drawBuildings(){
     setText(r.off,tag); r.off.style.color='var(--rust)'; r.off.style.fontSize='12px';
 
     if(r.n!==n){ r.slots.innerHTML=Array.from({length:n},()=>'<div class="slot"></div>').join(''); r.n=n; }
-    const here=cnt(k), mv=S.workers.filter(w=>w.to===k).sort((a,b)=>a.eta-b.eta);
+    const hereW=at(k), here=hereW.length, mv=S.workers.filter(w=>w.to===k).sort((a,b)=>a.eta-b.eta);
     Array.from(r.slots.children).forEach((el,i)=>{
-      let cls='slot', txt='', bg='';
-      if(i<here){ cls='slot on'; txt='●'; }
+      let cls='slot', txt='', bg='', tip='';
+      if(i<here){
+        const w=hereW[i], fit=w.spec===k;
+        cls = fit?'slot on':'slot sub'; txt = fit?'●':'○'; tip = who(w);
+      }
       else if(i-here<mv.length){
-        const eta=mv[i-here].eta, p=Math.round((1-eta/C.moveTime)*100);
-        cls='slot move'; txt=String(Math.ceil(eta));
+        const w=mv[i-here], p=Math.round((1-w.eta/C.moveTime)*100);
+        cls='slot move'; txt=String(Math.ceil(w.eta)); tip=`${who(w)} 着任中`;
         bg=`linear-gradient(to top,var(--ochre) ${p}%,var(--paper-2) ${p}%)`;
       }
       if(el.className!==cls) el.className=cls;
+      if(el.title!==tip) el.title=tip;
       el.style.background=bg;
       setText(el,txt);
     });
@@ -623,6 +675,9 @@ function draw(){
   setText($('rDep'),String(Math.floor(S.deposit)));
   setRate('qDep',q.dep, S.deposit<=0 ? '枯渇' : undefined);
   setText($('idleN'),String(idle()));
+  const chips = at('idle').map(w=>
+    `<span class="who ${w.spec}">${w.name}·${SPEC[w.spec]}</span>`).join('');
+  if($('idleList').innerHTML!==chips) $('idleList').innerHTML=chips;
   setText($('clock'),mmss(realLeft));
   const ck = realLeft<=60 ? 'clock warn' : 'clock';
   if($('clock').className!==ck) $('clock').className=ck;
