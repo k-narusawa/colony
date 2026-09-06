@@ -1,5 +1,5 @@
 // 更新したいときは CACHE の数字を上げる。それだけで古いキャッシュが捨てられる。
-const CACHE = 'colony-v1';
+const CACHE = 'colony-v2';
 const ASSETS = ['./', './index.html', './manifest.json',
                 './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
 

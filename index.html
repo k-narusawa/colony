@@ -191,18 +191,18 @@
 <script>
 // ============ パラメータ(ここだけ触れば挙動が変わる)============
 const C = {
-  genBase:[5,7,10,13], genPerLv:3,
-  houseDraw:2, popCapBase:10, popCapPerLv:4, residentKW:.3,
-  farmDraw:4, foodOut:1, foodPerPop:.1, foodCap:200,
-  growthNeed:300, growthMin:100, starveMult:.2,
-  scrapSlots:5, scrapPerLv:2, scrapPerMan:.5,
-  shopDraw:3, shopSlots:4, shopPerLv:2, partsPerMan:.2, scrapPerPart:2,
+  genBase:[7,9,12,15], genPerLv:4, brokenMult:.65,
+  houseDraw:2, popCapBase:10, popCapPerLv:4, residentKW:.15,
+  farmDraw:4, foodOut:1.6, foodPerPop:.1, foodCap:200,
+  growthNeed:240, growthMin:100, starveMult:.2,
+  scrapSlots:5, scrapPerLv:2, scrapPerMan:.7,
+  shopDraw:3, shopSlots:4, shopPerLv:2, partsPerMan:.28, scrapPerPart:2,
   moveTime:20,          // 着任にかかる秒数(この遅延がマルチタスク感の正体)
-  evMin:60, evVar:50,   // 突発事象の間隔
+  evMin:80, evVar:60,   // 突発事象の間隔
   sessionSec:600
 };
 const UPS = [
-  {k:'gen',   n:'発電機',  d:'出力 +3kW',   cost:100},
+  {k:'gen',   n:'発電機',  d:'出力 +4kW',   cost:100},
   {k:'house', n:'居住区',  d:'人口上限 +4', cost:120},
   {k:'scrap', n:'解体場',  d:'人員枠 +2',   cost:80},
   {k:'shop',  n:'工房',    d:'人員枠 +2',   cost:200},
@@ -245,7 +245,7 @@ const isOn   = k => k==='farm' ? S.farmOn   : S.shopOn;
 function genOut(){
   const w = Math.min(cnt('gen'), C.genBase.length-1);
   const o = C.genBase[w] + (S.lv.gen-1)*C.genPerLv;
-  return S.broken ? o*.5 : o;
+  return S.broken ? o*C.brokenMult : o;
 }
 const baseDraw = () => C.houseDraw + S.cold + S.pop*C.residentKW;
 

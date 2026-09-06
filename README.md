@@ -7,6 +7,7 @@
 | ファイル | 役割 |
 |---|---|
 | `index.html` | ゲーム本体。パラメータは冒頭の `C` と `UPS` に集約 |
+| `balance-check.js` | バランス確認用のヘッドレスシム。`C` をいじったら `node balance-check.js` |
 | `manifest.json` | ホーム画面に追加するための設定 |
 | `sw.js` | オフライン起動用。更新時は `CACHE` の数字を上げる |
 | `icon-*.png` | アイコン。`icon.py` で再生成できる |
