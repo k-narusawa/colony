@@ -1,0 +1,533 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="manifest" href="./manifest.json">
+<meta name="theme-color" content="#C6C3BA">
+<!-- iOS はホーム画面に追加したときだけアプリとして起動する -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="荒廃コロニー">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<title>荒廃コロニー 稼働記録板</title>
+<style>
+  :root{
+    --ash:#C6C3BA; --paper:#E6E3DB; --paper-2:#DAD7CE;
+    --ink:#23262A; --soft:#61666C; --line:#A9A59B;
+    --rust:#A6462A; --copper:#2F6560; --ochre:#8C6A22;
+    --sans:"Helvetica Neue",Arial,"Hiragino Kaku Gothic ProN","Yu Gothic",Meiryo,sans-serif;
+    --mono:"SF Mono","Roboto Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html{background:var(--ash)}
+  body{margin:0;background:var(--ash);color:var(--ink);font-family:var(--sans);
+       font-size:15px;line-height:1.5;
+       padding:calc(14px + env(safe-area-inset-top)) calc(14px + env(safe-area-inset-right))
+               calc(14px + env(safe-area-inset-bottom)) calc(14px + env(safe-area-inset-left));
+       overscroll-behavior:none;              /* 引っ張って再読み込みを止める */
+       -webkit-text-size-adjust:100%;}
+  .wrap{max-width:1000px;margin:0 auto}
+  h1{font-size:19px;font-weight:600;margin:0 0 2px;letter-spacing:.02em}
+  .sub{color:var(--soft);font-size:13px;margin:0 0 14px}
+  .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+  .panel{background:var(--paper);border:1px solid var(--line);padding:14px;margin-bottom:12px}
+  .panel h2{font-size:13px;font-weight:600;margin:0 0 10px;color:var(--soft)}
+
+  /* --- 配電盤(この画面の主役) --- */
+  #powerPanel{border-width:2px;border-color:var(--ink)}
+  .pwrTop{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
+  .pwrBig{font-family:var(--mono);font-size:34px;font-weight:500;letter-spacing:-.02em}
+  .pwrBig small{font-size:15px;color:var(--soft);font-weight:400}
+  .pwrState{font-size:13px;font-weight:600}
+  .bar{position:relative;height:30px;background:var(--paper-2);border:1px solid var(--line);display:flex}
+  .seg{height:100%;border-right:1px solid rgba(255,255,255,.5);display:flex;align-items:center;
+       justify-content:center;font-size:11px;color:#fff;overflow:hidden;white-space:nowrap;
+       transition:width .2s linear}
+  .s-base{background:var(--soft)} .s-farm{background:var(--ochre)} .s-shop{background:var(--copper)}
+  .cap{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--ink)}
+  .cap::after{content:"供給上限";position:absolute;top:-15px;left:3px;font-size:10px;color:var(--ink);white-space:nowrap}
+  .over{background:repeating-linear-gradient(45deg,var(--rust),var(--rust) 5px,#8d3a22 5px,#8d3a22 10px)}
+
+  /* --- 資源 --- */
+  .res{display:grid;grid-template-columns:repeat(5,1fr);gap:1px;background:var(--line)}
+  .res div{background:var(--paper);padding:8px 6px;text-align:center}
+  .res b{display:block;font-family:var(--mono);font-size:19px;font-weight:500}
+  .res span{font-size:11px;color:var(--soft)}
+
+  /* --- 建物ロースター --- */
+  .bld{border-top:1px solid var(--line);padding:11px 0;display:grid;
+       grid-template-columns:1fr auto;gap:8px;align-items:center}
+  .bld:first-of-type{border-top:none}
+  .bname{font-weight:600;font-size:15px}
+  .bmeta{font-size:12px;color:var(--soft);font-family:var(--mono)}
+  .slots{display:flex;gap:4px;margin-top:6px;flex-wrap:wrap}
+  .slot{width:22px;height:26px;border:1px solid var(--line);background:var(--paper-2);
+        display:flex;align-items:center;justify-content:center;font-size:10px;
+        font-family:var(--mono);color:var(--soft)}
+  .slot.on{background:var(--ochre);border-color:var(--ochre);color:#fff}
+  .slot.move{background:repeating-linear-gradient(45deg,#d3c9ab,#d3c9ab 3px,var(--paper-2) 3px,var(--paper-2) 6px);
+             color:var(--ink)}
+  .ctl{display:flex;gap:5px;align-items:center}
+  button{font-family:inherit;font-size:14px;background:var(--paper-2);border:1px solid var(--line);
+         color:var(--ink);padding:6px 11px;cursor:pointer;
+         touch-action:manipulation;           /* ダブルタップ拡大を抑える */
+         -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+  button:hover:not(:disabled){background:var(--ink);color:var(--paper)}
+  button:disabled{opacity:.32;cursor:not-allowed}
+  button:focus-visible{outline:2px solid var(--rust);outline-offset:2px}
+  .tog{min-width:86px;font-size:13px}
+
+  .idlebar{display:flex;align-items:center;gap:9px;padding:9px 11px;background:var(--paper-2);
+           border:1px dashed var(--line);margin-bottom:11px}
+  .idlebar b{font-family:var(--mono);font-size:19px}
+
+  /* --- 強化 --- */
+  .ups{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+  .up{border:1px solid var(--line);padding:9px;background:var(--paper-2)}
+  .up p{margin:0 0 7px;font-size:12px;color:var(--soft)}
+  .up strong{display:block;font-size:14px;color:var(--ink);margin-bottom:2px}
+  .up button{width:100%}
+
+  /* --- 警報と記録 --- */
+  #alerts{margin-bottom:12px}
+  .alert{background:var(--rust);color:#fff;padding:11px 13px;margin-bottom:6px;
+         display:flex;justify-content:space-between;align-items:center;gap:10px}
+  .alert button{background:#fff;border-color:#fff;color:var(--rust);font-weight:600}
+  .alert button:hover:not(:disabled){background:var(--ink);color:#fff;border-color:var(--ink)}
+  .alert .num{font-size:13px;opacity:.9}
+  #log{height:130px;overflow-y:auto;font-size:12.5px;font-family:var(--mono);line-height:1.75}
+  #log div{border-bottom:1px solid var(--paper-2);padding:1px 0}
+  #log .t{color:var(--soft)} #log .bad{color:var(--rust)} #log .good{color:var(--copper)}
+
+  .hud{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+  .clock{font-family:var(--mono);font-size:23px;font-weight:500;min-width:78px}
+  .cols{display:grid;grid-template-columns:1fr;gap:12px}
+  @media(min-width:760px){ .cols{grid-template-columns:1.35fr 1fr} }
+  /* 実機は指で連打するので、押す的を大きくする */
+  @media(max-width:759px){
+    .ctl button{min-width:52px;min-height:48px;font-size:19px}
+    .ctl .tog{min-width:96px;font-size:14px}
+    .slot{width:26px;height:30px}
+    .res b{font-size:17px}
+    .hud button{min-height:44px}
+  }
+
+  #done{position:fixed;inset:0;background:rgba(35,38,42,.94);color:var(--paper);
+        display:none;align-items:center;justify-content:center;padding:20px;z-index:9}
+  #done .box{max-width:460px;background:var(--paper);color:var(--ink);padding:26px;border:1px solid var(--ink)}
+  #done h2{margin:0 0 12px;font-size:20px}
+  #done ul{padding-left:19px;margin:12px 0}
+  #done .q{background:var(--paper-2);padding:13px;margin-top:16px;font-size:14px}
+  @media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+  <h1>荒廃コロニー 稼働記録板</h1>
+  <p class="sub">10分の実測。電力の切り替えは即時、人員の着任には20秒かかります。</p>
+
+  <div class="hud">
+    <span class="clock" id="clock">10:00</span>
+    <button id="playBtn">開始</button>
+    <button data-sp="1">等速</button>
+    <button data-sp="2">2倍速</button>
+    <button data-sp="4">4倍速</button>
+    <span class="num" style="color:var(--soft);font-size:13px" id="spLabel">2倍速</span>
+  </div>
+
+  <div id="alerts"></div>
+
+  <div class="panel" id="powerPanel">
+    <div class="pwrTop">
+      <div class="pwrBig"><span id="pDem">0.0</span> <small>/ <span id="pSup">0.0</span> kW</small></div>
+      <div class="pwrState" id="pState">安定</div>
+    </div>
+    <div class="bar" id="bar"><div class="cap" id="cap"></div></div>
+  </div>
+
+  <div class="res panel" style="padding:0">
+    <div><b id="rPop">5</b><span>住民</span></div>
+    <div><b id="rFood">200</b><span>食料</span></div>
+    <div><b id="rScrap">0</b><span>スクラップ</span></div>
+    <div><b id="rParts">0</b><span>部品</span></div>
+    <div><b id="rDep">3000</b><span>埋蔵量</span></div>
+  </div>
+
+  <div class="cols">
+    <div>
+      <div class="panel">
+        <h2>人員配置</h2>
+        <div class="idlebar">
+          <b id="idleN">5</b><span>人が待機中</span>
+          <span style="margin-left:auto;font-size:12px;color:var(--soft)">配置を外すのは即時</span>
+        </div>
+        <div id="blds"></div>
+      </div>
+    </div>
+    <div>
+      <div class="panel">
+        <h2>強化</h2>
+        <div class="ups" id="ups"></div>
+      </div>
+      <div class="panel">
+        <h2>記録</h2>
+        <div id="log"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="done"><div class="box">
+  <h2>10分経過</h2>
+  <div id="stats"></div>
+  <div class="q">
+    <b>確かめること</b>
+    <ul style="margin:8px 0 0">
+      <li>手が止まる暇はあったか</li>
+      <li>何をすべきか迷う瞬間はあったか</li>
+    </ul>
+  </div>
+  <button style="margin-top:16px;width:100%" onclick="location.reload()">もう一度</button>
+</div></div>
+
+<script>
+// ============ パラメータ(ここだけ触れば挙動が変わる)============
+const C = {
+  genBase:[5,7,10,13], genPerLv:3,
+  houseDraw:2, popCapBase:10, popCapPerLv:4, residentKW:.3,
+  farmDraw:4, foodOut:1, foodPerPop:.1, foodCap:200,
+  growthNeed:300, growthMin:100, starveMult:.2,
+  scrapSlots:5, scrapPerLv:2, scrapPerMan:.5,
+  shopDraw:3, shopSlots:4, shopPerLv:2, partsPerMan:.2, scrapPerPart:2,
+  moveTime:20,          // 着任にかかる秒数(この遅延がマルチタスク感の正体)
+  evMin:60, evVar:50,   // 突発事象の間隔
+  sessionSec:600
+};
+const UPS = [
+  {k:'gen',   n:'発電機',  d:'出力 +3kW',   cost:100},
+  {k:'house', n:'居住区',  d:'人口上限 +4', cost:120},
+  {k:'scrap', n:'解体場',  d:'人員枠 +2',   cost:80},
+  {k:'shop',  n:'工房',    d:'人員枠 +2',   cost:200},
+];
+const ORDER = ['gen','scrap','farm','shop'];
+
+// ============ 状態 ============
+let S, running=false, speed=2, realLeft=C.sessionSec, lastMs=0;
+let peakPop=5, brownSec=0, idleSec=0, totalParts=0;
+
+function init(){
+  S = { t:0, pop:5, workers:[], food:C.foodCap, scrap:0, parts:0, deposit:3000, growth:0,
+        farmOn:true, shopOn:true, lv:{gen:1,house:1,scrap:1,shop:1},
+        broken:false, repairT:0, cold:0, coldLeft:0, nextEv:70, log:[],
+        farmLive:false, shopLive:false, sup:0, dem:0, brown:false };
+  for(let i=0;i<5;i++) S.workers.push({at:'idle', eta:0, to:null});
+  log('発電機に整備員を送ると出力が上がる');
+}
+init();
+
+const B = {
+  gen:  {name:'発電機',   slots:()=>3, tog:false,
+         note:()=>`整備 ${cnt('gen')}人 → 出力 ${genOut().toFixed(1)}kW`},
+  scrap:{name:'解体場',   slots:()=>C.scrapSlots+(S.lv.scrap-1)*C.scrapPerLv, tog:false,
+         note:()=>`電力不要 / スクラップ ${(cnt('scrap')*C.scrapPerMan*mult()).toFixed(1)}/秒`},
+  farm: {name:'水耕農場', slots:()=>0, tog:true,
+         note:()=>`${C.farmDraw}kW / 人手不要 / 食料 ${C.foodOut.toFixed(1)}/秒`},
+  shop: {name:'工房',     slots:()=>C.shopSlots+(S.lv.shop-1)*C.shopPerLv, tog:true,
+         note:()=>`${C.shopDraw}kW / 部品 ${(cnt('shop')*C.partsPerMan*mult()).toFixed(2)}/秒`},
+};
+
+const cnt    = k => S.workers.filter(w=>w.at===k && w.eta<=0).length;
+const moving = k => S.workers.filter(w=>w.to===k).length;
+const idle   = () => S.workers.filter(w=>w.at==='idle' && w.eta<=0).length;
+const mult   = () => S.food<=0 ? C.starveMult : 1;
+const popCap = () => C.popCapBase+(S.lv.house-1)*C.popCapPerLv;
+const isLive = k => k==='farm' ? S.farmLive : k==='shop' ? S.shopLive : true;
+const isOn   = k => k==='farm' ? S.farmOn   : S.shopOn;
+
+function genOut(){
+  const w = Math.min(cnt('gen'), C.genBase.length-1);
+  const o = C.genBase[w] + (S.lv.gen-1)*C.genPerLv;
+  return S.broken ? o*.5 : o;
+}
+const baseDraw = () => C.houseDraw + S.cold + S.pop*C.residentKW;
+
+function log(msg, cls){ S.log.unshift({t:S.t,msg,cls}); if(S.log.length>60) S.log.pop(); }
+const mmss = s => `${String(Math.floor(s/60)).padStart(2,'0')}:${String(Math.floor(Math.max(0,s)%60)).padStart(2,'0')}`;
+
+// ============ 1ティック ============
+function step(dt){
+  S.t += dt;
+
+  if(S.coldLeft>0){ S.coldLeft-=dt; if(S.coldLeft<=0){ S.cold=0; log('寒波が去った','good'); } }
+
+  S.workers.forEach(w=>{ if(w.eta>0){ w.eta-=dt; if(w.eta<=0){ w.at=w.to; w.to=null; } } });
+
+  if(S.repairT>0 && cnt('gen')>0){
+    S.repairT -= dt;
+    if(S.repairT<=0){ S.broken=false; log('発電機を復旧した','good'); }
+  }
+
+  // --- 給電 ---
+  const sup=genOut(), base=baseDraw();
+  let avail=sup-base;
+  S.brown = avail<0;
+  S.farmLive=false; S.shopLive=false;
+  if(!S.brown){
+    if(S.farmOn && avail>=C.farmDraw){ S.farmLive=true; avail-=C.farmDraw; }
+    if(S.shopOn && cnt('shop')>0 && avail>=C.shopDraw){ S.shopLive=true; avail-=C.shopDraw; }
+  }
+  const shed = S.shopOn && cnt('shop')>0 && !S.shopLive && !S.brown;
+  if(shed && !S._shed) log('電力が足りず工房が止まった','bad');
+  S._shed = shed;
+  if(S.brown && !S._brown) log('停電。基礎負荷すら賄えていない','bad');
+  S._brown = S.brown;
+  if(S.brown) brownSec += dt;
+
+  S.sup=sup;
+  S.dem=base+(S.farmLive?C.farmDraw:0)+(S.shopLive?C.shopDraw:0);
+  S.freeFarm=Math.max(0,sup-base);
+  S.freeShop=Math.max(0,sup-base-(S.farmLive?C.farmDraw:0));
+
+  const m=mult();
+  if(!S.brown){
+    const got=Math.min(S.deposit, cnt('scrap')*C.scrapPerMan*m*dt);
+    S.deposit-=got; S.scrap+=got;
+    if(S.deposit<=0 && !S._dep){ log('廃墟を掘り尽くした','bad'); S._dep=true; }
+  }
+  if(S.shopLive){
+    let want=cnt('shop')*C.partsPerMan*m*dt, need=want*C.scrapPerPart;
+    if(S.scrap<need){ want=S.scrap/C.scrapPerPart; need=S.scrap; }
+    S.scrap-=need; S.parts+=want; totalParts+=want;
+  }
+
+  S.food=Math.max(0, Math.min(C.foodCap, S.food+((S.farmLive?C.foodOut:0)-S.pop*C.foodPerPop)*dt));
+  if(S.food<=0 && !S._starve){ log('食料が尽きた。作業速度が落ちる','bad'); S._starve=true; }
+  if(S.food>0) S._starve=false;
+
+  if(S.food>=C.growthMin){
+    S.growth+=dt;
+    if(S.growth>=C.growthNeed && S.pop<popCap()){
+      S.growth=0; S.pop++; S.workers.push({at:'idle',eta:0,to:null});
+      peakPop=Math.max(peakPop,S.pop);
+      log(`住民が1人増えた(${S.pop}人)。待機に加わった`);
+    }
+  }
+  if(idle()>0) idleSec+=dt;
+
+  if(S.t>S.nextEv){ fireEvent(); S.nextEv=S.t+C.evMin+Math.random()*C.evVar; }
+}
+
+function fireEvent(){
+  const pool=['cold','ruin'];
+  if(!S.broken) pool.push('break','break');
+  if(S.pop<popCap()) pool.push('migrant');
+  switch(pool[Math.floor(Math.random()*pool.length)]){
+    case 'break':   S.broken=true; S.repairT=0; log('発電機が故障した。出力が半減','bad'); break;
+    case 'cold':    S.cold=3; S.coldLeft=120; log('寒波。居住区の消費が +3kW','bad'); break;
+    case 'ruin':    S.deposit+=1200; S._dep=false; log('新しい廃墟を見つけた。埋蔵量 +1200','good'); break;
+    case 'migrant': S.pop+=2; S.workers.push({at:'idle',eta:0,to:null},{at:'idle',eta:0,to:null});
+                    peakPop=Math.max(peakPop,S.pop); log('移民が2人到着した'); break;
+  }
+}
+
+// ============ 操作 ============
+function assign(k){
+  const w=S.workers.find(w=>w.at==='idle'&&w.eta<=0);
+  if(!w || cnt(k)+moving(k)>=B[k].slots()) return;
+  w.at='moving'; w.to=k; w.eta=C.moveTime;
+}
+function unassign(k){
+  const w = S.workers.find(w=>w.to===k) || S.workers.find(w=>w.at===k&&w.eta<=0);
+  if(!w) return;
+  w.at='idle'; w.to=null; w.eta=0;   // 離脱は即時
+}
+function buy(i){
+  const u=UPS[i];
+  if(S.parts<u.cost) return;
+  S.parts-=u.cost; S.lv[u.k]++; u.cost=Math.round(u.cost*1.8);
+  log(`${u.n}を強化した(Lv${S.lv[u.k]})`,'good');
+}
+function repair(){
+  if(S.parts<30||S.repairT>0||!S.broken) return;
+  S.parts-=30; S.repairT=20; log('修理を開始した。整備員が必要');
+}
+
+// ============ DOMを一度だけ組む ============
+const $ = id=>document.getElementById(id);
+const R = {};
+
+function buildStatic(){
+  $('blds').innerHTML = ORDER.map(k=>{
+    const b=B[k];
+    return `<div class="bld"><div>
+      <div class="bname"><span data-nm="${k}">${b.name}</span><span data-off="${k}"></span></div>
+      <div class="bmeta" data-meta="${k}"></div>
+      <div class="slots" data-slots="${k}"></div>
+    </div><div class="ctl">
+      ${b.tog?`<button class="tog" data-tog="${k}"></button>`:''}
+      ${b.slots()>0||k!=='farm'?`<button data-un="${k}">−</button><button data-as="${k}">＋</button>`:''}
+    </div></div>`;
+  }).join('');
+
+  $('ups').innerHTML = UPS.map((u,i)=>`<div class="up">
+    <strong data-uptitle="${i}"></strong><p>${u.d}</p>
+    <button data-up="${i}"></button></div>`).join('');
+
+  $('alerts').innerHTML = `
+    <div class="alert" id="aBroken" style="display:none">
+      <span>発電機が故障している。出力が半減中 <span class="num" id="aRep"></span></span>
+      <button id="repBtn">修理する(部品30)</button>
+    </div>
+    <div class="alert" id="aIdle" style="background:var(--ochre);display:none">
+      <span><span id="aIdleN"></span>人が待機したままになっている</span>
+    </div>`;
+
+  ORDER.forEach(k=>{
+    R[k]={ off:document.querySelector(`[data-off="${k}"]`),
+           meta:document.querySelector(`[data-meta="${k}"]`),
+           slots:document.querySelector(`[data-slots="${k}"]`),
+           tog:document.querySelector(`[data-tog="${k}"]`),
+           un:document.querySelector(`[data-un="${k}"]`),
+           as:document.querySelector(`[data-as="${k}"]`), n:-1 };
+  });
+}
+
+// ============ 中身だけ書き換える ============
+function setText(el,v){ if(el && el.textContent!==v) el.textContent=v; }
+function setDis(el,v){ if(el && el.disabled!==v) el.disabled=v; }
+
+function drawBar(){
+  const sup=S.sup, base=baseDraw();
+  const scale=Math.max(sup,S.dem,1)*1.12, pct=v=>(v/scale*100)+'%';
+  const segs=[['s-base',base,'基礎']];
+  if(S.farmLive) segs.push(['s-farm',C.farmDraw,'農場']);
+  if(S.shopLive) segs.push(['s-shop',C.shopDraw,'工房']);
+  if(S.brown)    segs.push(['over',base-sup,'不足']);
+  $('bar').innerHTML=`<div class="cap" style="left:${pct(sup)}"></div>`+
+    segs.filter(s=>s[1]>0).map(([c,v,l])=>`<div class="seg ${c}" style="width:${pct(v)}">${l}</div>`).join('');
+
+  setText($('pDem'),S.dem.toFixed(1));
+  setText($('pSup'),sup.toFixed(1));
+  const st=$('pState'), spare=sup-S.dem;
+  if(S.brown){ setText(st,'停電'); st.style.color='var(--rust)'; }
+  else { setText(st,`空き ${spare.toFixed(1)}kW`);
+         st.style.color = spare<1 ? 'var(--ochre)' : 'var(--copper)'; }
+}
+
+function drawBuildings(){
+  ORDER.forEach(k=>{
+    const b=B[k], r=R[k], n=b.slots();
+    let note=b.note(), tag='', col='var(--rust)';
+    if(b.tog && !isOn(k)){ tag=' 遮断中'; col='var(--ochre)'; }
+    else if(b.tog && !isLive(k) && !S.brown){
+      const need = k==='farm'?C.farmDraw:C.shopDraw;
+      const free = k==='farm'?S.freeFarm:S.freeShop;
+      tag=' 電力不足'; note += ` / あと ${Math.max(0,need-free).toFixed(1)}kW 足りない`;
+    } else if(b.tog && S.brown){ tag=' 停電'; }
+    setText(r.meta,note);
+    setText(r.off,tag); r.off.style.color=col; r.off.style.fontSize='12px';
+
+    if(r.n!==n){ r.slots.innerHTML=Array.from({length:n},()=>'<div class="slot"></div>').join(''); r.n=n; }
+    const here=cnt(k), mv=S.workers.filter(w=>w.to===k).sort((a,b)=>a.eta-b.eta);
+    Array.from(r.slots.children).forEach((el,i)=>{
+      let cls='slot', txt='';
+      if(i<here){ cls='slot on'; txt='●'; }
+      else if(i-here<mv.length){ cls='slot move'; txt=String(Math.ceil(mv[i-here].eta)); }
+      if(el.className!==cls) el.className=cls;
+      setText(el,txt);
+    });
+
+    if(r.tog){
+      if(r.tog.className!=='tog') r.tog.className='tog';
+      setText(r.tog, isOn(k)?'遮断する':'通電する');
+    }
+    if(r.as){
+      setDis(r.as, idle()===0 || here+moving(k)>=n);
+      setDis(r.un, here+moving(k)===0);
+    }
+  });
+}
+
+function drawUps(){
+  UPS.forEach((u,i)=>{
+    setText(document.querySelector(`[data-uptitle="${i}"]`),`${u.n} Lv${S.lv[u.k]+1}`);
+    const btn=document.querySelector(`[data-up="${i}"]`);
+    setText(btn,`部品 ${u.cost}`); setDis(btn,S.parts<u.cost);
+  });
+}
+
+function drawAlerts(){
+  $('aBroken').style.display = S.broken?'flex':'none';
+  if(S.broken){
+    setText($('aRep'), S.repairT>0
+      ? `修理まで ${Math.ceil(S.repairT)}秒${cnt('gen')===0?' / 整備員がいない':''}` : '');
+    $('repBtn').style.display = S.repairT>0?'none':'';
+    setDis($('repBtn'), S.parts<30);
+  }
+  const n=idle();
+  $('aIdle').style.display = n>0?'flex':'none';
+  if(n>0) setText($('aIdleN'),String(n));
+}
+
+function draw(){
+  drawBar(); drawBuildings(); drawUps(); drawAlerts();
+  setText($('rPop'),`${S.pop}/${popCap()}`);
+  setText($('rFood'),String(Math.floor(S.food)));
+  setText($('rScrap'),String(Math.floor(S.scrap)));
+  setText($('rParts'),String(Math.floor(S.parts)));
+  setText($('rDep'),String(Math.floor(S.deposit)));
+  setText($('idleN'),String(idle()));
+  setText($('clock'),mmss(realLeft));
+  const html=S.log.map(l=>`<div><span class="t">[${mmss(l.t)}]</span> <span class="${l.cls||''}">${l.msg}</span></div>`).join('');
+  if($('log').innerHTML!==html) $('log').innerHTML=html;
+}
+
+// ============ ループ ============
+function loop(ms){
+  requestAnimationFrame(loop);
+  if(!running){ lastMs=ms; return; }
+  const d=Math.min((ms-lastMs)/1000,.25); lastMs=ms;
+  realLeft-=d; step(d*speed);
+  if(realLeft<=0){ running=false; finish(); }
+  draw();
+}
+requestAnimationFrame(loop);
+
+function finish(){
+  $('stats').innerHTML=`<ul>
+      <li>到達人口 ${peakPop}人(上限 ${popCap()})</li>
+      <li>部品 累計 ${Math.floor(totalParts)} / 強化 ${Object.values(S.lv).reduce((a,b)=>a+b,0)-4}回</li>
+      <li>停電していた時間 ${Math.round(brownSec)}秒</li>
+      <li>誰かを待機させたままだった時間 ${Math.round(idleSec)}秒</li>
+    </ul>
+    <p style="font-size:13px;color:var(--soft);margin:0">
+      待機を放置した時間が長いほど、手が回っていなかったことになります。</p>`;
+  $('done').style.display='flex';
+}
+
+// ============ 入力(pointerdownで受ける。押した瞬間に確定する)============
+document.addEventListener('pointerdown', e=>{
+  const t=e.target.closest('button');
+  if(!t || t.disabled) return;
+  if(t.dataset.as)  assign(t.dataset.as);
+  if(t.dataset.un)  unassign(t.dataset.un);
+  if(t.dataset.tog){ if(t.dataset.tog==='farm') S.farmOn=!S.farmOn; else S.shopOn=!S.shopOn; }
+  if(t.dataset.up)  buy(+t.dataset.up);
+  if(t.dataset.sp){ speed=+t.dataset.sp; setText($('spLabel'),t.textContent); }
+  if(t.id==='repBtn'){ repair(); }
+  if(t.id==='playBtn'){ running=!running; t.textContent=running?'一時停止':'再開'; }
+  draw();
+});
+
+buildStatic();
+draw();
+
+// ホーム画面から起動したときはオフラインでも動くようにする
+if('serviceWorker' in navigator){
+  addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+}
+// 画面を離れている間は進行を止める(裏で進むのは放置設計を入れてから)
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden && running){
+    running=false; $('playBtn').textContent='再開';
+  }
+});
+</script>
