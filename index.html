@@ -268,7 +268,9 @@
       <li>何をすべきか迷う瞬間はあったか</li>
     </ul>
   </div>
-  <button style="margin-top:16px;width:100%" onclick="location.reload()">もう一度</button>
+  <button style="margin-top:16px;width:100%" onclick="save();location.reload()">続ける(コロニーは残る)</button>
+  <button style="margin-top:8px;width:100%"
+          onclick="wipe()">最初からやり直す</button>
 </div></div>
 
 <script>
@@ -294,7 +296,8 @@ const C = {
   // ここに得意分野の揺れを入れると農場が生き死にする崖になってしまう。
   // 整備の腕は代わりに修理速度へ効かせる(こちらは閾値を持たない)
   specMatch:1, specMiss:.6,
-  sessionSec:600
+  sessionSec:600,
+  offlineCap:8*3600    // 留守のぶんを計算する上限。これより長く離れても8時間ぶん
 };
 const UPS = [
   {k:'gen',   n:'発電機',  d:'出力 +4kW',   cost:100},
@@ -340,7 +343,56 @@ function init(){
   }
   log('得意分野に合った持ち場ほどよく働く。＋は適任を自動で選ぶ');
 }
-init();
+// ============ 保存と、留守にしていたあいだの進行 ============
+// 進みは実時刻の差で出す(フレーム数で数えると、裏に回ったタブで止まる)。
+// 貯まる量は埋蔵量と食料が勝手に頭打ちにするので、別の上限は置いていない
+const KEY='colony-save';
+let quiet=false, awayAt=0, lastSave=0, wiped=false;
+
+function save(){
+  if(wiped) return;
+  try{ localStorage.setItem(KEY, JSON.stringify(
+    {t:Date.now(), S, cost:UPS.map(u=>u.cost), pool:namePool})); }catch(e){}
+}
+
+// 消すだけでは駄目。リロードで pagehide が走り、消した直後に書き戻してしまう
+function wipe(){
+  wiped=true;
+  try{ localStorage.removeItem(KEY); }catch(e){}
+  location.reload();
+}
+
+function catchUpTo(since){
+  const sec=Math.min(Math.floor((Date.now()-since)/1000), C.offlineCap);
+  if(sec<C.moveTime) return;                          // 少し離れただけなら何も起きない
+  const was={parts:S.parts, scrap:S.scrap, food:S.food, pop:S.pop};
+  const snap=[brownSec,idleSec,totalParts,deaths];    // 留守のぶんはセッション統計に混ぜない
+  quiet=true;
+  // ponytail: 1秒刻みで本編の step をそのまま回す(8時間で28800回)。
+  // 別式を持たせると本編とズレる。重くなってから刻みを粗くする
+  // finally が無いと、途中で転んだときログが黙ったままになる
+  try{ for(let i=0;i<sec;i++) step(1); } finally{ quiet=false; }
+  ;[brownSec,idleSec,totalParts,deaths]=snap;
+  const d=(a,b)=>(b-a>=0?'+':'')+Math.round(b-a);
+  const away=sec>=3600 ? `${(sec/3600).toFixed(1)}時間` : `${Math.round(sec/60)}分`;
+  log(`${away}留守にしていた — 部品 ${d(was.parts,S.parts)} / スクラップ ${d(was.scrap,S.scrap)}`
+     +` / 食料 ${d(was.food,S.food)} / 住民 ${d(was.pop,S.pop)}`, S.pop<was.pop?'bad':'good');
+}
+
+// 持ち越すのはコロニーだけ。セッションの残り時間と結果はその回かぎりのもの
+function load(){
+  const d=JSON.parse(localStorage.getItem(KEY)||'null');
+  if(!d || !d.S) return false;
+  S=d.S; namePool=d.pool||[];
+  d.cost.forEach((c,i)=>{ if(UPS[i]) UPS[i].cost=c; });
+  logSeq=S.log.length ? S.log[0].id : 0;
+  peakPop=S.pop;
+  catchUpTo(d.t);
+  return true;
+}
+
+// 起動は下の buildStatic() の直前。load() は step() まで呼ぶので、
+// step() が使う at / eff / popCap などが出そろってからでないと動かない
 
 // io は [要るもの, 出るもの]。上の資源グリッドと同じ記号なので、
 // 「工房は電力とスクラップを食って部品を出す」が数字を読まなくても目で繋がる
@@ -382,7 +434,7 @@ function genOut(){
 }
 const baseDraw = () => C.houseDraw + S.cold + S.pop*C.residentKW + (isNight()?C.nightDraw:0);
 
-function log(msg, cls){ S.log.unshift({id:++logSeq,t:S.t,msg,cls}); if(S.log.length>60) S.log.pop(); }
+function log(msg, cls){ if(quiet) return; S.log.unshift({id:++logSeq,t:S.t,msg,cls}); if(S.log.length>60) S.log.pop(); }
 const mmss = s => `${String(Math.floor(s/60)).padStart(2,'0')}:${String(Math.floor(Math.max(0,s)%60)).padStart(2,'0')}`;
 
 // step() と同じ式。表示だけなので dt を掛けず毎秒あたりで返す
@@ -485,7 +537,8 @@ function step(dt){
   }
   if(idle()>0) idleSec+=dt;
 
-  if(S.t>S.nextEv){ fireEvent(); S.nextEv=S.t+C.evMin+Math.random()*C.evVar; }
+  // 留守中は事象を起こさない。手を出せない事故で焼き切られると理不尽になる
+  if(S.t>S.nextEv){ if(!quiet) fireEvent(); S.nextEv=S.t+C.evMin+Math.random()*C.evVar; }
 }
 
 function fireEvent(){
@@ -880,6 +933,7 @@ function draw(){
 // ============ ループ ============
 function loop(ms){
   requestAnimationFrame(loop);
+  if(ms-lastSave>10000){ lastSave=ms; save(); }   // 止めていても保存する。閉じた時刻を残すため
   if(!running){ lastMs=ms; return; }
   const d=Math.min((ms-lastMs)/1000,.25); lastMs=ms;
   realLeft-=d; step(d*speed);
@@ -899,6 +953,7 @@ function finish(){
     <p style="font-size:13px;color:var(--soft);margin:0">
       待機を放置した時間が長いほど、手が回っていなかったことになります。</p>`;
   $('done').style.display='flex';
+  save();
 }
 
 // ============ 入力(pointerdownで受ける。押した瞬間に確定する)============
@@ -918,6 +973,10 @@ document.addEventListener('pointerdown', e=>{
   draw();
 });
 
+// 壊れたセーブや、保存が禁じられた文脈(プライベート閲覧など)でも起動できるようにする
+try{ if(!load()) init(); }
+catch(e){ try{ localStorage.removeItem(KEY); }catch(_){} init(); }
+
 buildStatic();
 fitCanvas();
 draw();
@@ -926,10 +985,14 @@ draw();
 if('serviceWorker' in navigator){
   addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
 }
-// 画面を離れている間は進行を止める(裏で進むのは放置設計を入れてから)
+// 画面を離れたら止めて時刻を控え、戻ってきたらその差分をまとめて進める
 document.addEventListener('visibilitychange',()=>{
-  if(document.hidden && running){
-    running=false; $('playBtn').textContent='再開';
+  if(document.hidden){
+    awayAt=Date.now(); save();
+    if(running){ running=false; $('playBtn').textContent='再開'; }
+  }else if(awayAt){
+    catchUpTo(awayAt); awayAt=0; draw();
   }
 });
+addEventListener('pagehide', save);
 </script>
