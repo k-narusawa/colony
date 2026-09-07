@@ -262,6 +262,9 @@ const C = {
   genBase:[7,9,12,15], genPerLv:4, brokenMult:.65,
   houseDraw:2, popCapBase:10, popCapPerLv:4, residentKW:.15,
   farmDraw:4, foodOut:1.6, foodPerPop:.1, foodCap:200,
+  // 農場の強化。収穫を増やすぶん消費も上がるので、発電機を追わないと工房が落ちる。
+  // 貯蔵も一緒に伸ばす。人口が少ないうちは収穫が余って満タンで捨てるだけになるため
+  farmOutPerLv:.8, farmDrawPerLv:1.5, foodCapPerLv:60,
   growthNeed:240, growthMin:100, starveMult:.2,
   scrapSlots:5, scrapPerLv:2, scrapPerMan:.7,
   shopDraw:3, shopSlots:4, shopPerLv:2, partsPerMan:.28, scrapPerPart:2,
@@ -288,6 +291,8 @@ const UPS = [
   {k:'house', n:'居住区',  d:'人口上限 +4', cost:120},
   {k:'scrap', n:'解体場',  d:'人員枠 +2',   cost:80},
   {k:'shop',  n:'工房',    d:'人員枠 +2',   cost:200},
+  // 末尾に足す。セーブは値段を UPS の並び順で持っているので、途中に挟むと古いセーブがズレる
+  {k:'farm',  n:'水耕農場',d:'食料 +0.8/秒・貯蔵 +60', cost:140},
 ];
 const ORDER = ['gen','scrap','farm','shop'];
 
@@ -311,7 +316,7 @@ let S, running=false, speed=2, lastMs=0, logSeq=0;
 
 function init(){
   S = { t:0, pop:5, workers:[], food:C.foodCap, scrap:0, parts:0, deposit:3000, growth:0,
-        farmOn:true, shopOn:true, lv:{gen:1,house:1,scrap:1,shop:1},
+        farmOn:true, shopOn:true, lv:{gen:1,house:1,scrap:1,shop:1,farm:1},
         broken:false, repairT:0, cold:0, coldLeft:0, nextEv:70, log:[], _night:false,
         starveT:0, brownT:0,
         farmLive:false, shopLive:false, sup:0, dem:0, brown:false,
@@ -374,6 +379,8 @@ function load(){
   const d=JSON.parse(localStorage.getItem(KEY)||'null');
   if(!d || !d.S) return false;
   S=d.S; namePool=d.pool||[];
+  // 農場の強化を足す前のセーブには lv.farm が無い。欠けたまま計算すると全部 NaN になる
+  if(!S.lv.farm) S.lv.farm=1;
   d.cost.forEach((c,i)=>{ if(UPS[i]) UPS[i].cost=c; });
   logSeq=S.log.length ? S.log[0].id : 0;
   catchUpTo(d.t);
@@ -393,7 +400,8 @@ const B = {
          io:[['pop','dep'],['scrap']],
          note:()=>`電力不要 / スクラップ ${(eff('scrap')*C.scrapPerMan*mult()).toFixed(1)}/秒`},
   farm: {name:'水耕農場', slots:()=>0, tog:true, io:[['kw'],['food']],
-         note:()=>`${C.farmDraw}kW / 人手不要 / 食料 ${C.foodOut.toFixed(1)}/秒`},
+         note:()=>`${+farmDraw().toFixed(1)}kW / 人手不要 / 食料 ${foodOut().toFixed(1)}/秒`
+                + ` / 貯蔵 ${foodCap()}`},
   shop: {name:'工房',     slots:()=>C.shopSlots+(S.lv.shop-1)*C.shopPerLv, tog:true,
          io:[['kw','pop','scrap'],['parts']],
          note:()=>`${C.shopDraw}kW / 部品 ${(eff('shop')*C.partsPerMan*mult()).toFixed(2)}/秒`},
@@ -408,6 +416,10 @@ const moving = k => S.workers.filter(w=>w.to===k).length;
 const idle   = () => S.workers.filter(w=>w.at==='idle' && w.eta<=0).length;
 const mult   = () => S.food<=0 ? C.starveMult : 1;
 const popCap = () => C.popCapBase+(S.lv.house-1)*C.popCapPerLv;
+// 農場は強化で伸びる。収穫・消費電力・貯蔵の3つが同じ Lv から出る
+const foodOut  = () => C.foodOut +(S.lv.farm-1)*C.farmOutPerLv;
+const farmDraw = () => C.farmDraw+(S.lv.farm-1)*C.farmDrawPerLv;
+const foodCap  = () => C.foodCap +(S.lv.farm-1)*C.foodCapPerLv;
 const isLive = k => k==='farm' ? S.farmLive : k==='shop' ? S.shopLive : true;
 const isOn   = k => k==='farm' ? S.farmOn   : S.shopOn;
 
@@ -433,7 +445,7 @@ function rates(){
   const m=mult();
   const scr = (S.brown||S.deposit<=0) ? 0 : eff('scrap')*C.scrapPerMan*m;
   const prt = S.shopLive ? Math.min(eff('shop')*C.partsPerMan*m, S.scrap/C.scrapPerPart) : 0;
-  return { food:(S.farmLive?C.foodOut:0)-S.pop*C.foodPerPop,
+  return { food:(S.farmLive?foodOut():0)-S.pop*C.foodPerPop,
            scrap:scr-prt*C.scrapPerPart, parts:prt, dep:-scr };
 }
 // 住民はレートより「次の1人まで何秒か」のほうが読める
@@ -469,7 +481,7 @@ function step(dt){
   S.brown = avail<0;
   S.farmLive=false; S.shopLive=false;
   if(!S.brown){
-    if(S.farmOn && avail>=C.farmDraw){ S.farmLive=true; avail-=C.farmDraw; }
+    if(S.farmOn && avail>=farmDraw()){ S.farmLive=true; avail-=farmDraw(); }
     if(S.shopOn && cnt('shop')>0 && avail>=C.shopDraw){ S.shopLive=true; avail-=C.shopDraw; }
   }
   const shed = S.shopOn && cnt('shop')>0 && !S.shopLive && !S.brown;
@@ -486,9 +498,9 @@ function step(dt){
   } else S.brownT=0;   // 一瞬の停電では壊れない。続いたときだけ
 
   S.sup=sup;
-  S.dem=base+(S.farmLive?C.farmDraw:0)+(S.shopLive?C.shopDraw:0);
+  S.dem=base+(S.farmLive?farmDraw():0)+(S.shopLive?C.shopDraw:0);
   S.freeFarm=Math.max(0,sup-base);
-  S.freeShop=Math.max(0,sup-base-(S.farmLive?C.farmDraw:0));
+  S.freeShop=Math.max(0,sup-base-(S.farmLive?farmDraw():0));
 
   const m=mult();
   if(!S.brown){
@@ -502,7 +514,7 @@ function step(dt){
     S.scrap-=need; S.parts+=want;
   }
 
-  S.food=Math.max(0, Math.min(C.foodCap, S.food+((S.farmLive?C.foodOut:0)-S.pop*C.foodPerPop)*dt));
+  S.food=Math.max(0, Math.min(foodCap(), S.food+((S.farmLive?foodOut():0)-S.pop*C.foodPerPop)*dt));
   if(S.food<=0 && !S._starve){ log('食料が尽きた。作業速度が落ちる','bad'); S._starve=true; }
   if(S.food>0) S._starve=false;
 
@@ -757,7 +769,7 @@ function drawBar(){
   const sup=S.sup, base=baseDraw();
   const scale=Math.max(sup,S.dem,1)*1.12, pct=v=>(v/scale*100)+'%';
   const segs=[['s-base',base,'基礎']];
-  if(S.farmLive) segs.push(['s-farm',C.farmDraw,'農場']);
+  if(S.farmLive) segs.push(['s-farm',farmDraw(),'農場']);
   if(S.shopLive) segs.push(['s-shop',C.shopDraw,'工房']);
   if(S.brown)    segs.push(['over',base-sup,'不足']);
   $('bar').innerHTML=`<div class="cap${sup/scale>.8?' r':''}" style="left:${pct(sup)}"></div>`+
@@ -786,7 +798,7 @@ function drawBuildings(){
       if(S.brown) tag=' 停電';
       else if(k==='shop' && cnt('shop')===0) tag=' 人員なし';
       else if(!isLive(k)){
-        const need = k==='farm'?C.farmDraw:C.shopDraw;
+        const need = k==='farm'?farmDraw():C.shopDraw;
         const free = k==='farm'?S.freeFarm:S.freeShop;
         tag=' 電力不足'; note += ` / あと ${Math.max(0,need-free).toFixed(1)}kW 足りない`;
       }
@@ -900,7 +912,7 @@ function draw(){
   setText($('rPop'),`${S.pop}/${popCap()}`);
   setRate('qPop',0,popNote());
   setText($('rFood'),String(Math.floor(S.food)));
-  setRate('qFood',q.food, S.food>=C.foodCap&&q.food>0 ? '満タン' : undefined);
+  setRate('qFood',q.food, S.food>=foodCap()&&q.food>0 ? '満タン' : undefined);
   setText($('rScrap'),String(Math.floor(S.scrap)));
   setRate('qScrap',q.scrap);
   setText($('rParts'),String(Math.floor(S.parts)));
