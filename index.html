@@ -1,7 +1,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="manifest" href="./manifest.json">
-<meta name="theme-color" content="#C6C3BA">
+<meta name="theme-color" content="#241a16">
 <!-- iOS はホーム画面に追加したときだけアプリとして起動する -->
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -10,9 +10,13 @@
 <title>荒廃コロニー 稼働記録板</title>
 <style>
   :root{
-    --ash:#C6C3BA; --paper:#E6E3DB; --paper-2:#DAD7CE;
-    --ink:#23262A; --soft:#61666C; --line:#A9A59B;
-    --rust:#A6462A; --copper:#2F6560; --ochre:#8C6A22;
+    /* 素材(Kenney Sci-Fi RTS)の色から取っている。
+       地面の赤茶を背景に、建物の灰をパネルに、ラインのオレンジを警告に */
+    --ash:#241a16; --paper:#333a3e; --paper-2:#2a3033;
+    --ink:#e8e4dc; --soft:#a8b0b5; --line:#4d565b;
+    --rust:#e05a3c; --copper:#46a5c8; --ochre:#d3a03c;
+    /* 上の3色は暗い面に置く文字用。白を載せる帯には濃い側を使う */
+    --rust-d:#8f3320; --copper-d:#1d5570; --ochre-d:#7a5a12;
     --sans:"Helvetica Neue",Arial,"Hiragino Kaku Gothic ProN","Yu Gothic",Meiryo,sans-serif;
     --mono:"SF Mono","Roboto Mono",Menlo,Consolas,monospace;
   }
@@ -39,14 +43,15 @@
   .pwrBig small{font-size:15px;color:var(--soft);font-weight:400}
   .pwrState{font-size:13px;font-weight:600}
   .bar{position:relative;height:30px;background:var(--paper-2);border:1px solid var(--line);display:flex}
-  .seg{height:100%;border-right:1px solid rgba(255,255,255,.5);display:flex;align-items:center;
-       justify-content:center;font-size:11px;color:#fff;overflow:hidden;white-space:nowrap;
+  .seg{height:100%;border-right:1px solid rgba(0,0,0,.25);display:flex;align-items:center;
+       justify-content:center;font-size:11px;color:#16191b;font-weight:600;overflow:hidden;white-space:nowrap;
        transition:width .2s linear}
   .s-base{background:var(--soft)} .s-farm{background:var(--ochre)} .s-shop{background:var(--copper)}
   .cap{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--ink)}
   .cap::after{content:"供給上限";position:absolute;top:-15px;left:3px;font-size:10px;color:var(--ink);white-space:nowrap}
   .cap.r::after{left:auto;right:3px}   /* 右端に寄ったらラベルを内側へ返す */
-  .over{background:repeating-linear-gradient(45deg,var(--rust),var(--rust) 5px,#8d3a22 5px,#8d3a22 10px)}
+  .over{background:repeating-linear-gradient(45deg,var(--rust),var(--rust) 5px,
+        var(--rust-d) 5px,var(--rust-d) 10px)}
   .phase{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:12px;
          color:var(--soft);margin-top:9px}
   .phase.warn{color:var(--ochre);font-weight:600} .phase.night{color:var(--rust)}
@@ -59,7 +64,9 @@
   /* 増減レート。空のときも高さを確保して行が跳ねないようにする */
   .res i{display:block;font-style:normal;font-size:10.5px;font-family:var(--mono);
          font-variant-numeric:tabular-nums;color:var(--soft);min-height:1.45em;margin-top:2px}
-  .res i.up{color:var(--copper)} .res i.dn{color:var(--rust)}
+  /* 強化カードの .up と衝突しないよう接頭辞を付けてある。
+     前の配色では色が近くて見えなかったが、枠と背景を拾っていた */
+  .res i.r-up{color:var(--copper)} .res i.r-dn{color:var(--rust)}
 
   /* --- 建物ロースター --- */
   .bld{border-top:1px solid var(--line);padding:11px 0;display:grid;
@@ -71,7 +78,7 @@
   .slot{width:22px;height:26px;border:1px solid var(--line);background:var(--paper-2);
         display:flex;align-items:center;justify-content:center;font-size:10px;
         font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--soft)}
-  .slot.on{background:var(--ochre);border-color:var(--ochre);color:#fff}
+  .slot.on{background:var(--ochre);border-color:var(--ochre);color:#1c2124}
   .slot.sub{border-color:var(--ochre);color:var(--ochre)}   /* 不適任 */
   /* 着任の進捗は下から塗る。塗り自体は drawBuildings がインラインで入れる */
   .slot.move{color:var(--ink);border-color:var(--ochre)}
@@ -107,10 +114,11 @@
 
   /* --- 警報と記録 --- */
   #alerts{margin-bottom:12px}
-  .alert{background:var(--rust);color:#fff;padding:11px 13px;margin-bottom:6px;
+  .alert{background:var(--rust-d);color:#fff;padding:11px 13px;margin-bottom:6px;
          display:flex;justify-content:space-between;align-items:center;gap:10px}
-  .alert button{background:#fff;border-color:#fff;color:var(--rust);font-weight:600}
-  .alert button:hover:not(:disabled){background:var(--ink);color:#fff;border-color:var(--ink)}
+  .alert.warn{background:var(--ochre-d)} .alert.info{background:var(--copper-d)}
+  .alert button{background:#fff;border-color:#fff;color:var(--rust-d);font-weight:600}
+  .alert button:hover:not(:disabled){background:#171b1d;color:#fff;border-color:#171b1d}
   .alert .num{font-size:13px;opacity:.9}
   #log{height:130px;overflow-y:auto;font-size:12.5px;font-family:var(--mono);line-height:1.75}
   #log div{border-bottom:1px solid var(--paper-2);padding:1px 0}
@@ -545,7 +553,7 @@ function buildStatic(){
     <button data-up="${i}"></button></div>`).join('');
 
   $('alerts').innerHTML = `
-    <div class="alert" id="aNight" style="background:var(--ochre);display:none">
+    <div class="alert warn" id="aNight" style="display:none">
       <span id="aNightN"></span>
     </div>
     <div class="alert" id="aBroken" style="display:none">
@@ -555,10 +563,10 @@ function buildStatic(){
     <div class="alert" id="aFood" style="display:none">
       <span id="aFoodN"></span>
     </div>
-    <div class="alert" id="aIdle" style="background:var(--ochre);display:none">
+    <div class="alert warn" id="aIdle" style="display:none">
       <span><span id="aIdleN"></span>人が待機したままになっている</span>
     </div>
-    <div class="alert" id="aUp" style="background:var(--copper);display:none">
+    <div class="alert info" id="aUp" style="display:none">
       <span><span id="aUpN"></span></span>
       <button id="aUpBtn" data-buy="0">強化する</button>
     </div>`;
@@ -625,10 +633,20 @@ function blit(g,[r,c],dx,dy){
 }
 const man = (g,w,tx,ty) => blit(g, SP.man[w.spec], tx*M.T, ty*M.T);
 
-function lamp(g,x,y){
+function lamp(g,x,y,a){
   const r=30, grd=g.createRadialGradient(x,y,0,x,y,r);
-  grd.addColorStop(0,'rgba(255,216,130,.5)'); grd.addColorStop(1,'rgba(255,216,130,0)');
+  grd.addColorStop(0,`rgba(255,216,130,${a})`); grd.addColorStop(1,'rgba(255,216,130,0)');
   g.fillStyle=grd; g.beginPath(); g.arc(x,y,r,0,Math.PI*2); g.fill();
+}
+
+// 夜の濃さを 0→1 で返す。二値で切り替えると日没が唐突なので、
+// 前後 12 秒かけて渡す。予告アラートが出ている間に空が変わっていく
+function nightAmt(){
+  const p=S.t%CYCLE, f=12;
+  if(p < C.dayLen-f) return 0;
+  if(p < C.dayLen)   return (p-(C.dayLen-f))/f;
+  if(p < CYCLE-f)    return 1;
+  return (CYCLE-p)/f;
 }
 
 function drawMap(){
@@ -666,16 +684,20 @@ function drawMap(){
   // 着任中は待機所から持ち場へ歩く。eta をそのまま補間に使うので状態は増えない
   S.workers.filter(w=>w.to).forEach(w=>{
     const p=1-w.eta/C.moveTime, [bx,by]=SITE[w.to];
-    man(g,w, .5+(bx-.35-.5)*p, IDLE_Y+(by+.85-IDLE_Y)*p);
+    const bob = Math.sin(S.t*7+bx)*.035;   // 歩幅に合わせて上下させる
+    man(g,w, .5+(bx-.35-.5)*p, IDLE_Y+(by+.85-IDLE_Y)*p + bob);
   });
 
   // 夜。明かりは暗くしたあとに乗せる
-  if(isNight()){ g.fillStyle='rgba(14,20,45,.5)'; g.fillRect(0,0,M.cols*T,M.rows*T); }
+  const nt=nightAmt(), W=M.cols*T, H=M.rows*T;
+  if(nt>0){ g.fillStyle=`rgba(14,20,45,${.52*nt})`; g.fillRect(0,0,W,H); }
   if(!S.brown) ORDER.forEach(k=>{
     if(!active(k)) return;
     const [x,y]=SITE[k];
-    lamp(g, x*T+T/2, y*T+T*.72);
+    lamp(g, x*T+T/2, y*T+T*.72, .2+.35*nt);
   });
+  // 停電。明かりが消えたうえに、盤面全体が赤く沈む
+  if(S.brown){ g.fillStyle='rgba(150,36,18,.2)'; g.fillRect(0,0,W,H); }
 }
 
 function drawBar(){
@@ -802,7 +824,7 @@ function drawAlerts(){
 function setRate(id,v,txt){
   const el=$(id);
   setText(el, txt!==undefined ? txt : (v>0?'+':'')+v.toFixed(1)+'/秒');
-  const cls = txt!==undefined ? '' : v>0.001 ? 'up' : v<-0.001 ? 'dn' : '';
+  const cls = txt!==undefined ? '' : v>0.001 ? 'r-up' : v<-0.001 ? 'r-dn' : '';
   if(el.className!==cls) el.className=cls;
 }
 

@@ -1,6 +1,6 @@
 // 更新したいときは CACHE の数字を上げる。それだけで古いキャッシュが捨てられる。
-const CACHE = 'colony-v3';
-const ASSETS = ['./', './index.html', './manifest.json',
+const CACHE = 'colony-v4';
+const ASSETS = ['./', './index.html', './manifest.json', './assets/tiles.png',
                 './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
