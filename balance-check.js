@@ -12,7 +12,7 @@ function run(seed) {
   let s = seed;
   const rnd = () => (s = (s * 1103515245 + 12345) % 2147483648) / 2147483648;
   const S = { t:0, pop:5, workers:[], food:C.foodCap, scrap:0, parts:0, deposit:DEPOSIT,
-              growth:0, lv:{gen:1,house:1,scrap:1,shop:1}, broken:false, repairT:0,
+              growth:0, lv:{gen:1,house:1,scrap:1,shop:1,farm:1}, broken:false, repairT:0,
               cold:0, coldLeft:0, nextEv:70, starveT:0, brownT:0 };
   const SPECS = ['gen', 'scrap', 'shop'];
   const mk = () => ({ spec:SPECS[Math.floor(rnd() * 3)], at:'idle', eta:0, to:null });
@@ -21,7 +21,7 @@ function run(seed) {
     if (i < SPECS.length) w.spec = SPECS[i];   // 本体と同じく初期の3分野を保証
     S.workers.push(w);
   }
-  const UPS = [{k:'gen',cost:100},{k:'scrap',cost:80},{k:'shop',cost:200}];
+  const UPS = [{k:'gen',cost:100},{k:'scrap',cost:80},{k:'shop',cost:200},{k:'farm',cost:140}];
   const at = k => S.workers.filter(w => w.at === k && w.eta <= 0);
   const cnt = k => at(k).length;
   const eff = k => at(k).reduce((a, w) => a + (w.spec === k ? C.specMatch : C.specMiss), 0);
@@ -30,6 +30,10 @@ function run(seed) {
   const slots = { gen:() => 3,
                   scrap:() => C.scrapSlots + (S.lv.scrap - 1) * C.scrapPerLv,
                   shop:() => C.shopSlots + (S.lv.shop - 1) * C.shopPerLv };
+  // 農場は強化で伸びる。index.html の foodOut() / farmDraw() / foodCap() と同じ式
+  const foodOut  = () => C.foodOut  + (S.lv.farm - 1) * C.farmOutPerLv;
+  const farmDraw = () => C.farmDraw + (S.lv.farm - 1) * C.farmDrawPerLv;
+  const foodCap  = () => C.foodCap  + (S.lv.farm - 1) * C.foodCapPerLv;
   const genOut = () => {
     const o = C.genBase[Math.min(cnt('gen'), C.genBase.length - 1)] + (S.lv.gen - 1) * C.genPerLv;
     return S.broken ? o * C.brokenMult : o;
@@ -68,7 +72,7 @@ function run(seed) {
     let avail = sup - base, farmLive = false, shopLive = false;
     const brown = avail < 0;
     if (!brown) {
-      if (avail >= C.farmDraw) { farmLive = true; avail -= C.farmDraw; }
+      if (avail >= farmDraw()) { farmLive = true; avail -= farmDraw(); }
       if (cnt('shop') > 0 && avail >= C.shopDraw) { shopLive = true; avail -= C.shopDraw; }
     }
     if (brown) {
@@ -91,8 +95,8 @@ function run(seed) {
       if (S.scrap < need) { want = S.scrap / C.scrapPerPart; need = S.scrap; }
       S.scrap -= need; S.parts += want; r.parts += want;
     }
-    S.food = Math.max(0, Math.min(C.foodCap,
-      S.food + ((farmLive ? C.foodOut : 0) - S.pop * C.foodPerPop) * dt));
+    S.food = Math.max(0, Math.min(foodCap(),
+      S.food + ((farmLive ? foodOut() : 0) - S.pop * C.foodPerPop) * dt));
 
     if (S.food <= 0) {
       S.starveT += dt;
