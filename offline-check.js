@@ -26,7 +26,7 @@ const check = `
 init();
 ['gen','gen','gen','scrap','shop'].forEach(assign);
 S.workers.forEach(w => { if (w.to) { w.at = w.to; w.to = null; w.eta = 0; } });  // 着任を待たない
-brownSec = 123;                                  // 留守のぶんが混ざらないことを見るための目印
+const day0 = day();
 const was = { parts:S.parts, scrap:S.scrap, deposit:S.deposit, logs:S.log.length };
 save();
 
@@ -44,7 +44,7 @@ A(Object.values(nums).every(v => Number.isFinite(v) && v >= 0),
 A(S.parts > was.parts, '留守のあいだに部品が貯まる (' + was.parts + ' → ' + S.parts.toFixed(0) + ')');
 A(S.deposit < was.deposit, '埋蔵量が減っている(勝手に湧かない)');
 A(S.pop >= 1 && S.pop <= popCap(), '住民が1人以上、上限以下 (' + S.pop + '/' + popCap() + ')');
-A(brownSec === 123, '留守のぶんがセッション統計に混ざらない');
+A(day() > day0 + 100, '日付が進む (' + day0 + '日目 → ' + day() + '日目)');
 A(S.log.length <= 60 && /留守/.test(S.log[0].msg), 'ログが溢れず、要約が1行だけ乗る');
 A(ms < 3000, '8時間ぶんの計算が一瞬で終わる (' + ms + 'ms)');
 A(catchUpTo(Date.now()) === undefined && S.parts === nums.parts, '離れていない時間では何も動かない');

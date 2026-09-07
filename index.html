@@ -126,7 +126,9 @@
 
   .hud{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
   .clock{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:23px;font-weight:500;min-width:78px}
-  .clock.warn{color:var(--rust)}
+  /* やり直すは押し間違えると全部消える。端に寄せて、確認を挟むあいだだけ赤くする */
+  .wipe{margin-left:auto;color:var(--soft)}
+  .wipe.armed{background:var(--rust);border-color:var(--rust);color:#fff}
   /* 直近の出来事。記録パネルはスマホだと最下部にあって見えない */
   #ticker{font-family:var(--mono);font-size:12px;color:var(--soft);padding:5px 2px;
           margin-bottom:12px;border-bottom:1px solid var(--line);
@@ -143,12 +145,6 @@
     .hud button{min-height:44px}
   }
 
-  #done{position:fixed;inset:0;background:rgba(35,38,42,.94);color:var(--paper);
-        display:none;align-items:center;justify-content:center;padding:20px;z-index:9}
-  #done .box{max-width:460px;background:var(--paper);color:var(--ink);padding:26px;border:1px solid var(--ink)}
-  #done h2{margin:0 0 12px;font-size:20px}
-  #done ul{padding-left:19px;margin:12px 0}
-  #done .q{background:var(--paper-2);padding:13px;margin-top:16px;font-size:14px}
   /* --- 俯瞰図 --- */
   /* 論理 512×320 を 1.5 倍まで引き伸ばす。pixelated なのでぼけない */
   #map{display:block;width:100%;max-width:768px;margin:0 auto 12px;
@@ -198,14 +194,15 @@
 
 <div class="wrap">
   <h1>荒廃コロニー 稼働記録板</h1>
-  <p class="sub">10分の実測。電力の切り替えは即時、人員の着任には20秒かかります。夜になると暖房で消費が上がります。</p>
+  <p class="sub">電力の切り替えは即時、人員の着任には20秒かかります。夜になると暖房で消費が上がります。閉じているあいだも進みます。</p>
 
   <div class="hud">
-    <span class="clock" id="clock">10:00</span>
+    <span class="clock" id="clock">1日目</span>
     <button id="playBtn">開始</button>
     <button data-sp="1" aria-pressed="false">等速</button>
     <button data-sp="2" aria-pressed="true">2倍速</button>
     <button data-sp="4" aria-pressed="false">4倍速</button>
+    <button id="wipeBtn" class="wipe">やり直す</button>
   </div>
 
   <canvas id="map" aria-label="コロニーの俯瞰図"></canvas>
@@ -258,20 +255,6 @@
   </div>
 </div>
 
-<div id="done"><div class="box">
-  <h2>10分経過</h2>
-  <div id="stats"></div>
-  <div class="q">
-    <b>確かめること</b>
-    <ul style="margin:8px 0 0">
-      <li>手が止まる暇はあったか</li>
-      <li>何をすべきか迷う瞬間はあったか</li>
-    </ul>
-  </div>
-  <button style="margin-top:16px;width:100%" onclick="save();location.reload()">続ける(コロニーは残る)</button>
-  <button style="margin-top:8px;width:100%"
-          onclick="wipe()">最初からやり直す</button>
-</div></div>
 
 <script>
 // ============ パラメータ(ここだけ触れば挙動が変わる)============
@@ -296,7 +279,8 @@ const C = {
   // ここに得意分野の揺れを入れると農場が生き死にする崖になってしまう。
   // 整備の腕は代わりに修理速度へ効かせる(こちらは閾値を持たない)
   specMatch:1, specMiss:.6,
-  sessionSec:600,
+  sessionSec:600,     // バランス確認の観測窓。balance-check.js だけが使う
+
   offlineCap:8*3600    // 留守のぶんを計算する上限。これより長く離れても8時間ぶん
 };
 const UPS = [
@@ -323,8 +307,7 @@ const mkWorker = () => ({ name:nextName(), spec:SPECS[Math.floor(Math.random()*S
 const who = w => `${w.name}(${SPEC[w.spec]})`;
 
 // ============ 状態 ============
-let S, running=false, speed=2, realLeft=C.sessionSec, lastMs=0, logSeq=0;
-let peakPop=5, brownSec=0, idleSec=0, totalParts=0, deaths=0;
+let S, running=false, speed=2, lastMs=0, logSeq=0;
 
 function init(){
   S = { t:0, pop:5, workers:[], food:C.foodCap, scrap:0, parts:0, deposit:3000, growth:0,
@@ -361,32 +344,38 @@ function wipe(){
   try{ localStorage.removeItem(KEY); }catch(e){}
   location.reload();
 }
+// 押し間違いで全部消えるボタンなので、5秒以内にもう一度押させる。
+// confirm() は PWA だとループを止めるので使わない
+let wipeArm=0;
+function wipeTap(){
+  const b=$('wipeBtn');
+  if(Date.now()<wipeArm) return wipe();
+  wipeArm=Date.now()+5000;
+  b.textContent='本当に消す?'; b.classList.add('armed');
+  setTimeout(()=>{ if(Date.now()>=wipeArm){ b.textContent='やり直す'; b.classList.remove('armed'); } },5000);
+}
 
 function catchUpTo(since){
   const sec=Math.min(Math.floor((Date.now()-since)/1000), C.offlineCap);
   if(sec<C.moveTime) return;                          // 少し離れただけなら何も起きない
   const was={parts:S.parts, scrap:S.scrap, food:S.food, pop:S.pop};
-  const snap=[brownSec,idleSec,totalParts,deaths];    // 留守のぶんはセッション統計に混ぜない
   quiet=true;
   // ponytail: 1秒刻みで本編の step をそのまま回す(8時間で28800回)。
   // 別式を持たせると本編とズレる。重くなってから刻みを粗くする
   // finally が無いと、途中で転んだときログが黙ったままになる
   try{ for(let i=0;i<sec;i++) step(1); } finally{ quiet=false; }
-  ;[brownSec,idleSec,totalParts,deaths]=snap;
   const d=(a,b)=>(b-a>=0?'+':'')+Math.round(b-a);
   const away=sec>=3600 ? `${(sec/3600).toFixed(1)}時間` : `${Math.round(sec/60)}分`;
   log(`${away}留守にしていた — 部品 ${d(was.parts,S.parts)} / スクラップ ${d(was.scrap,S.scrap)}`
      +` / 食料 ${d(was.food,S.food)} / 住民 ${d(was.pop,S.pop)}`, S.pop<was.pop?'bad':'good');
 }
 
-// 持ち越すのはコロニーだけ。セッションの残り時間と結果はその回かぎりのもの
 function load(){
   const d=JSON.parse(localStorage.getItem(KEY)||'null');
   if(!d || !d.S) return false;
   S=d.S; namePool=d.pool||[];
   d.cost.forEach((c,i)=>{ if(UPS[i]) UPS[i].cost=c; });
   logSeq=S.log.length ? S.log[0].id : 0;
-  peakPop=S.pop;
   catchUpTo(d.t);
   return true;
 }
@@ -426,6 +415,7 @@ const isOn   = k => k==='farm' ? S.farmOn   : S.shopOn;
 const CYCLE  = C.dayLen + C.nightLen;
 const isNight= () => (S.t % CYCLE) >= C.dayLen;
 const toNext = () => { const p=S.t % CYCLE; return p < C.dayLen ? C.dayLen-p : CYCLE-p; };
+const day    = () => Math.floor(S.t / CYCLE) + 1;   // 昼夜ひと回りで1日
 
 function genOut(){
   const w = Math.min(cnt('gen'), C.genBase.length-1);
@@ -435,7 +425,8 @@ function genOut(){
 const baseDraw = () => C.houseDraw + S.cold + S.pop*C.residentKW + (isNight()?C.nightDraw:0);
 
 function log(msg, cls){ if(quiet) return; S.log.unshift({id:++logSeq,t:S.t,msg,cls}); if(S.log.length>60) S.log.pop(); }
-const mmss = s => `${String(Math.floor(s/60)).padStart(2,'0')}:${String(Math.floor(Math.max(0,s)%60)).padStart(2,'0')}`;
+// 記録の時刻。何日目まで続くので、分秒より「3日目 夜」のほうが後から読める
+const stamp = t => `${Math.floor(t/CYCLE)+1}日目${(t%CYCLE)>=C.dayLen?' 夜':''}`;
 
 // step() と同じ式。表示だけなので dt を掛けず毎秒あたりで返す
 function rates(){
@@ -487,7 +478,7 @@ function step(dt){
   if(S.brown && !S._brown) log('停電。基礎負荷すら賄えていない','bad');
   S._brown = S.brown;
   if(S.brown){
-    brownSec += dt; S.brownT += dt;
+    S.brownT += dt;
     if(S.brownT>=C.brownBreak && !S.broken){
       S.broken=true; S.repairT=0; S.brownT=0;
       log('停電が続いて発電機が焼けた。出力が半減','bad');
@@ -508,7 +499,7 @@ function step(dt){
   if(S.shopLive){
     let want=eff('shop')*C.partsPerMan*m*dt, need=want*C.scrapPerPart;
     if(S.scrap<need){ want=S.scrap/C.scrapPerPart; need=S.scrap; }
-    S.scrap-=need; S.parts+=want; totalParts+=want;
+    S.scrap-=need; S.parts+=want;
   }
 
   S.food=Math.max(0, Math.min(C.foodCap, S.food+((S.farmLive?C.foodOut:0)-S.pop*C.foodPerPop)*dt));
@@ -519,7 +510,7 @@ function step(dt){
   if(S.food<=0){
     S.starveT+=dt;
     if(S.starveT>=C.starveKill && S.pop>1){
-      S.starveT=0; S.pop--; S.growth=0; deaths++;
+      S.starveT=0; S.pop--; S.growth=0;
       const i=S.workers.findIndex(w=>w.at==='idle'&&w.eta<=0);
       const [lost]=S.workers.splice(i>=0?i:0,1);   // 待機者から先に失う
       log(`${who(lost)}が餓死した(残り ${S.pop}人)`,'bad');
@@ -531,11 +522,9 @@ function step(dt){
     if(S.growth>=C.growthNeed && S.pop<popCap()){
       S.growth=0; S.pop++;
       const w=mkWorker(); S.workers.push(w);
-      peakPop=Math.max(peakPop,S.pop);
       log(`${who(w)}が待機に加わった(${S.pop}人)`);
     }
   }
-  if(idle()>0) idleSec+=dt;
 
   // 留守中は事象を起こさない。手を出せない事故で焼き切られると理不尽になる
   if(S.t>S.nextEv){ if(!quiet) fireEvent(); S.nextEv=S.t+C.evMin+Math.random()*C.evVar; }
@@ -551,7 +540,6 @@ function fireEvent(){
     case 'ruin':    S.deposit+=1200; S._dep=false; log('新しい廃墟を見つけた。埋蔵量 +1200','good'); break;
     case 'migrant': { S.pop+=2;
                     const a=mkWorker(), b=mkWorker(); S.workers.push(a,b);
-                    peakPop=Math.max(peakPop,S.pop);
                     log(`移民が到着した — ${who(a)} と ${who(b)}`); break; }
   }
 }
@@ -899,10 +887,10 @@ function drawLog(){
   const top=+lg.dataset.top||0;
   // 先頭に足すだけにする。全書き換えだとスクロール位置と選択が飛ぶ
   S.log.filter(l=>l.id>top).reverse().forEach(l=>lg.insertAdjacentHTML('afterbegin',
-    `<div><span class="t">[${mmss(l.t)}]</span> <span class="${l.cls||''}">${l.msg}</span></div>`));
+    `<div><span class="t">[${stamp(l.t)}]</span> <span class="${l.cls||''}">${l.msg}</span></div>`));
   lg.dataset.top=newest.id;
   while(lg.children.length>60) lg.removeChild(lg.lastChild);
-  setText($('ticker'),`[${mmss(newest.t)}] ${newest.msg}`);
+  setText($('ticker'),`[${stamp(newest.t)}] ${newest.msg}`);
   $('ticker').className = newest.cls||'';
 }
 
@@ -924,9 +912,7 @@ function draw(){
   const chips = at('idle').map(w=>
     `<span class="who ${w.spec}">${ico(SPECIC[w.spec])}${w.name}·${SPEC[w.spec]}</span>`).join('');
   setHTML($('idleList'),chips);   // innerHTML を読み返すとブラウザの正規化で毎回不一致になる
-  setText($('clock'),mmss(realLeft));
-  const ck = realLeft<=60 ? 'clock warn' : 'clock';
-  if($('clock').className!==ck) $('clock').className=ck;
+  setText($('clock'),`${day()}日目`);
   drawLog();
 }
 
@@ -936,25 +922,10 @@ function loop(ms){
   if(ms-lastSave>10000){ lastSave=ms; save(); }   // 止めていても保存する。閉じた時刻を残すため
   if(!running){ lastMs=ms; return; }
   const d=Math.min((ms-lastMs)/1000,.25); lastMs=ms;
-  realLeft-=d; step(d*speed);
-  if(realLeft<=0){ running=false; finish(); }
+  step(d*speed);
   draw();
 }
 requestAnimationFrame(loop);
-
-function finish(){
-  $('stats').innerHTML=`<ul>
-      <li>到達人口 ${peakPop}人(上限 ${popCap()})</li>
-      <li>部品 累計 ${Math.floor(totalParts)} / 強化 ${Object.values(S.lv).reduce((a,b)=>a+b,0)-4}回</li>
-      <li>停電していた時間 ${Math.round(brownSec)}秒</li>
-      <li>誰かを待機させたままだった時間 ${Math.round(idleSec)}秒</li>
-      <li>${deaths?`餓死させた住民 ${deaths}人`:'餓死者なし'}</li>
-    </ul>
-    <p style="font-size:13px;color:var(--soft);margin:0">
-      待機を放置した時間が長いほど、手が回っていなかったことになります。</p>`;
-  $('done').style.display='flex';
-  save();
-}
 
 // ============ 入力(pointerdownで受ける。押した瞬間に確定する)============
 document.addEventListener('pointerdown', e=>{
@@ -969,6 +940,7 @@ document.addEventListener('pointerdown', e=>{
     document.querySelectorAll('[data-sp]').forEach(b=>
       b.setAttribute('aria-pressed', String(+b.dataset.sp===speed))); }
   if(t.id==='repBtn'){ repair(); }
+  if(t.id==='wipeBtn'){ wipeTap(); }
   if(t.id==='playBtn'){ running=!running; t.textContent=running?'一時停止':'再開'; }
   draw();
 });
