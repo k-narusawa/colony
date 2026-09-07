@@ -141,8 +141,47 @@
   #done h2{margin:0 0 12px;font-size:20px}
   #done ul{padding-left:19px;margin:12px 0}
   #done .q{background:var(--paper-2);padding:13px;margin-top:16px;font-size:14px}
+  /* --- 記号 --- */
+  /* currentColor に乗せてあるので、既存の色指定がそのまま効く */
+  .ic{width:1em;height:1em;vertical-align:-.14em;fill:none;stroke:currentColor;
+      stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round}
+  .res span .ic{width:1.2em;height:1.2em;margin-right:.28em;vertical-align:-.24em;opacity:.75}
+  .who .ic{width:12px;height:12px;margin-right:.25em;vertical-align:-.16em}
+  /* 建物の入出力。左が要るもの、右が出るもの。
+     建物名と同じ行に置いて、スマホでリストが縦に伸びないようにしている */
+  .bio{display:inline-flex;align-items:center;gap:4px;margin:0 8px;color:var(--soft)}
+  .bio .ic{width:15px;height:15px}
+  .bio .ar{color:var(--line);font-size:12px}
+  .bio .out{color:var(--copper)}
+  .slot .ic{width:13px;height:13px;stroke-width:1.6}
+
   @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
+
+<!-- 記号の置き場。ファイル内に持たせてあるので sw.js のキャッシュ一覧は変えなくていい -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-pop" viewBox="0 0 16 16">
+    <circle cx="8" cy="5" r="2.6"/><path d="M3.2 13.6c0-2.7 2.1-4.3 4.8-4.3s4.8 1.6 4.8 4.3"/>
+  </symbol>
+  <symbol id="i-food" viewBox="0 0 16 16">
+    <path d="M8 14V8"/>
+    <path d="M8 9.6C8 6.3 10.3 4 13.6 4c0 3.3-2.3 5.6-5.6 5.6Z"/>
+    <path d="M8 11.8C8 9.3 6.2 7.5 3.7 7.5c0 2.5 1.8 4.3 4.3 4.3Z"/>
+  </symbol>
+  <symbol id="i-scrap" viewBox="0 0 16 16">
+    <path d="M3 6.2 9.2 3.3 13.2 6.6 11 12.4 4.4 11.9Z"/><path d="M9.2 3.3 8.4 7.6l3.5.6"/>
+  </symbol>
+  <symbol id="i-parts" viewBox="0 0 16 16">
+    <path d="M8 2.3 13.2 5.2v5.6L8 13.7 2.8 10.8V5.2Z"/><circle cx="8" cy="8" r="2.3"/>
+  </symbol>
+  <!-- 埋蔵量は「まだ解体できる廃墟」なので、崩れかけたビルの輪郭にしてある -->
+  <symbol id="i-dep" viewBox="0 0 16 16">
+    <path d="M1.4 13.8h13.2"/><path d="M2.8 13.8V7.2h4V10h2.9V3.6h3.5v10.2"/>
+  </symbol>
+  <symbol id="i-kw" viewBox="0 0 16 16">
+    <path d="M9.6 1.9 4.2 8.8h3.4l-1 5.3 5.4-6.9H8.6Z"/>
+  </symbol>
+</svg>
 
 <div class="wrap">
   <h1>荒廃コロニー 稼働記録板</h1>
@@ -170,11 +209,11 @@
   <div id="ticker"></div>
 
   <div class="res panel" style="padding:0">
-    <div><b id="rPop">5</b><span>住民</span><i id="qPop"></i></div>
-    <div><b id="rFood">200</b><span>食料</span><i id="qFood"></i></div>
-    <div><b id="rScrap">0</b><span>スクラップ</span><i id="qScrap"></i></div>
-    <div><b id="rParts">0</b><span>部品</span><i id="qParts"></i></div>
-    <div><b id="rDep">3000</b><span>埋蔵量</span><i id="qDep"></i></div>
+    <div><b id="rPop">5</b><span><svg class="ic"><use href="#i-pop"/></svg>住民</span><i id="qPop"></i></div>
+    <div><b id="rFood">200</b><span><svg class="ic"><use href="#i-food"/></svg>食料</span><i id="qFood"></i></div>
+    <div><b id="rScrap">0</b><span><svg class="ic"><use href="#i-scrap"/></svg>スクラップ</span><i id="qScrap"></i></div>
+    <div><b id="rParts">0</b><span><svg class="ic"><use href="#i-parts"/></svg>部品</span><i id="qParts"></i></div>
+    <div><b id="rDep">3000</b><span><svg class="ic"><use href="#i-dep"/></svg>埋蔵量</span><i id="qDep"></i></div>
   </div>
 
   <div class="cols">
@@ -253,6 +292,7 @@ const ORDER = ['gen','scrap','farm','shop'];
 // ============ 住民 ============
 const SPECS = ['gen','scrap','shop'];
 const SPEC  = {gen:'整備', scrap:'解体', shop:'工作'};
+const SPECIC= {gen:'kw',  scrap:'scrap', shop:'parts'};   // 得意分野を、その分野が生むものの記号で表す
 const NAMES = ['アオイ','カエデ','サキ','タチバナ','ナオ','ハル','ミサキ','ユウ',
                'リン','イズミ','クルミ','セイ','トウマ','ノゾミ','ヒカリ','マコト'];
 let namePool = [];
@@ -273,7 +313,8 @@ function init(){
         farmOn:true, shopOn:true, lv:{gen:1,house:1,scrap:1,shop:1},
         broken:false, repairT:0, cold:0, coldLeft:0, nextEv:70, log:[], _night:false,
         starveT:0, brownT:0,
-        farmLive:false, shopLive:false, sup:0, dem:0, brown:false };
+        farmLive:false, shopLive:false, sup:0, dem:0, brown:false,
+        freeFarm:0, freeShop:0 };   // tick 前に draw が走るので、ここで 0 を入れておく
   namePool=[];
   // 初期メンバーは3分野を1人ずつ保証する。整備が誰もいない引きは
   // 挑戦ではなく詰みになるので、そこだけ運から外す
@@ -286,17 +327,22 @@ function init(){
 }
 init();
 
+// io は [要るもの, 出るもの]。上の資源グリッドと同じ記号なので、
+// 「工房は電力とスクラップを食って部品を出す」が数字を読まなくても目で繋がる
 const B = {
-  gen:  {name:'発電機',   slots:()=>3, tog:false,
+  gen:  {name:'発電機',   slots:()=>3, tog:false, io:[['pop'],['kw']],
          note:()=>`整備 ${cnt('gen')}人 → 出力 ${genOut().toFixed(1)}kW`
                 + (S.broken?` / 修理速度 ${eff('gen').toFixed(1)}倍`:'')},
   scrap:{name:'解体場',   slots:()=>C.scrapSlots+(S.lv.scrap-1)*C.scrapPerLv, tog:false,
+         io:[['pop','dep'],['scrap']],
          note:()=>`電力不要 / スクラップ ${(eff('scrap')*C.scrapPerMan*mult()).toFixed(1)}/秒`},
-  farm: {name:'水耕農場', slots:()=>0, tog:true,
+  farm: {name:'水耕農場', slots:()=>0, tog:true, io:[['kw'],['food']],
          note:()=>`${C.farmDraw}kW / 人手不要 / 食料 ${C.foodOut.toFixed(1)}/秒`},
   shop: {name:'工房',     slots:()=>C.shopSlots+(S.lv.shop-1)*C.shopPerLv, tog:true,
+         io:[['kw','pop','scrap'],['parts']],
          note:()=>`${C.shopDraw}kW / 部品 ${(eff('shop')*C.partsPerMan*mult()).toFixed(2)}/秒`},
 };
+const ico = (n,cls='') => `<svg class="ic ${cls}"><use href="#i-${n}"/></svg>`;
 
 const at     = k => S.workers.filter(w=>w.at===k && w.eta<=0);
 const cnt    = k => at(k).length;                       // 頭数(枠の判定とUI用)
@@ -476,7 +522,9 @@ function buildStatic(){
   $('blds').innerHTML = ORDER.map(k=>{
     const b=B[k];
     return `<div class="bld"><div>
-      <div class="bname"><span data-nm="${k}">${b.name}</span><span data-off="${k}"></span></div>
+      <div class="bname"><span data-nm="${k}">${b.name}</span><span class="bio">${
+        b.io[0].map(n=>ico(n)).join('')}<span class="ar">▶</span>${
+        b.io[1].map(n=>ico(n,'out')).join('')}</span><span data-off="${k}"></span></div>
       <div class="bmeta" data-meta="${k}"></div>
       <div class="slots" data-slots="${k}"></div>
     </div><div class="ctl">
@@ -521,6 +569,8 @@ function buildStatic(){
 // ============ 中身だけ書き換える ============
 function setText(el,v){ if(el && el.textContent!==v) el.textContent=v; }
 function setDis(el,v){ if(el && el.disabled!==v) el.disabled=v; }
+// 記号を入れる枠だけ。毎フレーム走るので、前回と同じなら DOM に触らない
+function setHTML(el,v){ if(el && el.dataset.h!==v){ el.innerHTML=v; el.dataset.h=v; } }
 
 function drawBar(){
   const sup=S.sup, base=baseDraw();
@@ -568,8 +618,10 @@ function drawBuildings(){
     Array.from(r.slots.children).forEach((el,i)=>{
       let cls='slot', txt='', bg='', tip='';
       if(i<here){
+        // ●/○ ではなくその人の得意分野の記号を出す。
+        // 不適任の枠には別分野の記号が並ぶので「誰を動かせばいいか」が枠だけで読める
         const w=hereW[i], fit=w.spec===k;
-        cls = fit?'slot on':'slot sub'; txt = fit?'●':'○'; tip = who(w);
+        cls = fit?'slot on':'slot sub'; txt = ico(SPECIC[w.spec]); tip = who(w);
       }
       else if(i-here<mv.length){
         const w=mv[i-here], p=Math.round((1-w.eta/C.moveTime)*100);
@@ -579,7 +631,7 @@ function drawBuildings(){
       if(el.className!==cls) el.className=cls;
       if(el.title!==tip) el.title=tip;
       el.style.background=bg;
-      setText(el,txt);
+      setHTML(el,txt);
     });
 
     if(r.tog){
@@ -675,9 +727,10 @@ function draw(){
   setText($('rDep'),String(Math.floor(S.deposit)));
   setRate('qDep',q.dep, S.deposit<=0 ? '枯渇' : undefined);
   setText($('idleN'),String(idle()));
+  // 記号は持ち場の枠と同じものを使う。「この記号の人を、この記号の建物へ」で繋がる
   const chips = at('idle').map(w=>
-    `<span class="who ${w.spec}">${w.name}·${SPEC[w.spec]}</span>`).join('');
-  if($('idleList').innerHTML!==chips) $('idleList').innerHTML=chips;
+    `<span class="who ${w.spec}">${ico(SPECIC[w.spec])}${w.name}·${SPEC[w.spec]}</span>`).join('');
+  setHTML($('idleList'),chips);   // innerHTML を読み返すとブラウザの正規化で毎回不一致になる
   setText($('clock'),mmss(realLeft));
   const ck = realLeft<=60 ? 'clock warn' : 'clock';
   if($('clock').className!==ck) $('clock').className=ck;
