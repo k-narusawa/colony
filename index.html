@@ -591,6 +591,7 @@ function setHTML(el,v){ if(el && el.dataset.h!==v){ el.innerHTML=v; el.dataset.h
 // タイルシートの座標の意味は docs/asset-plan.md に書いてある。
 // 素材は 128px 角。論理タイルを 64px にしてあるので、DPR=2 の端末では等倍で出る。
 const M = { cols:8, rows:5, T:64, SRC:128 };
+const MONO = 'ui-monospace,SFMono-Regular,Menlo,monospace';
 const SHEET = new Image();
 let sheetOK = false;
 SHEET.onload = () => { sheetOK = true; drawMap(); };
@@ -677,15 +678,13 @@ function drawMap(){
   const idlers = S.workers.filter(w=>w.at==='idle');
   const gap = Math.min(.8, 8.6/Math.max(idlers.length,1));
   idlers.forEach((w,i)=> man(g,w,.5+i*gap, IDLE_Y));
-  ORDER.forEach(k=>{
-    const [bx,by]=SITE[k];
-    at(k).forEach((w,i)=> man(g,w, bx-.35+i*.42, by+.85));
-  });
-  // 着任中は待機所から持ち場へ歩く。eta をそのまま補間に使うので状態は増えない
-  S.workers.filter(w=>w.to).forEach(w=>{
+  // 持ち場にいる人は描かない。何人で回しているかは下の 3/5 で出す。
+  // 着任中だけ歩かせる。eta をそのまま補間に使うので状態は増えない
+  S.workers.filter(w=>w.to).forEach((w,i)=>{
     const p=1-w.eta/C.moveTime, [bx,by]=SITE[w.to];
+    const sx = .5+i*.5;                    // 出発点をずらす。揃えると全員が重なって1人に見える
     const bob = Math.sin(S.t*7+bx)*.035;   // 歩幅に合わせて上下させる
-    man(g,w, .5+(bx-.35-.5)*p, IDLE_Y+(by+.85-IDLE_Y)*p + bob);
+    man(g,w, sx+(bx-sx)*p, IDLE_Y+(by+.55-IDLE_Y)*p + bob);
   });
 
   // 夜。明かりは暗くしたあとに乗せる
@@ -698,6 +697,19 @@ function drawMap(){
   });
   // 停電。明かりが消えたうえに、盤面全体が赤く沈む
   if(S.brown){ g.fillStyle='rgba(150,36,18,.2)'; g.fillRect(0,0,W,H); }
+
+  // 稼働人数。夜でも読めるよう、暗くしたあとに乗せる
+  g.font = '600 15px '+MONO; g.textAlign='center'; g.textBaseline='middle';
+  ORDER.forEach(k=>{
+    const cap=B[k].slots(); if(!cap) return;      // 水耕農場は人手不要なので出さない
+    const [x,y]=SITE[k], here=cnt(k), label=`${here}/${cap}`;
+    const cx=x*T+T/2, cy=y*T+T+10, bw=g.measureText(label).width+14;
+    g.fillStyle='rgba(10,12,14,.74)';
+    g.fillRect(cx-bw/2, cy-10, bw, 20);
+    // 空なら赤、埋まっていれば青。手を入れる先が色で分かる
+    g.fillStyle = here===0 ? '#ef7050' : here>=cap ? '#5bb6d8' : '#e8e4dc';
+    g.fillText(label, cx, cy);
+  });
 }
 
 function drawBar(){
