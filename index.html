@@ -141,6 +141,11 @@
   #done h2{margin:0 0 12px;font-size:20px}
   #done ul{padding-left:19px;margin:12px 0}
   #done .q{background:var(--paper-2);padding:13px;margin-top:16px;font-size:14px}
+  /* --- 俯瞰図 --- */
+  /* 論理 512×320 を 1.5 倍まで引き伸ばす。pixelated なのでぼけない */
+  #map{display:block;width:100%;max-width:768px;margin:0 auto 12px;
+       image-rendering:pixelated;                 /* ドット絵をぼかさない */
+       border:1px solid var(--line);background:#a4553a}
   /* --- 記号 --- */
   /* currentColor に乗せてあるので、既存の色指定がそのまま効く */
   .ic{width:1em;height:1em;vertical-align:-.14em;fill:none;stroke:currentColor;
@@ -194,6 +199,8 @@
     <button data-sp="2" aria-pressed="true">2倍速</button>
     <button data-sp="4" aria-pressed="false">4倍速</button>
   </div>
+
+  <canvas id="map" aria-label="コロニーの俯瞰図"></canvas>
 
   <div id="alerts" aria-live="polite"></div>
 
@@ -572,6 +579,105 @@ function setDis(el,v){ if(el && el.disabled!==v) el.disabled=v; }
 // 記号を入れる枠だけ。毎フレーム走るので、前回と同じなら DOM に触らない
 function setHTML(el,v){ if(el && el.dataset.h!==v){ el.innerHTML=v; el.dataset.h=v; } }
 
+// ============ 俯瞰図 ============
+// タイルシートの座標の意味は docs/asset-plan.md に書いてある。
+// 素材は 128px 角。論理タイルを 64px にしてあるので、DPR=2 の端末では等倍で出る。
+const M = { cols:8, rows:5, T:64, SRC:128 };
+const SHEET = new Image();
+let sheetOK = false;
+SHEET.onload = () => { sheetOK = true; drawMap(); };
+SHEET.src = './assets/tiles.png';
+
+const SP = {
+  ground:[[0,0],[0,1]],
+  // 廃墟は灰色の岩。赤い岩(4行目)だと地面と同系色で沈む
+  rubble:[[5,2],[5,3],[5,4],[5,5]],
+  speck:[[5,0],[4,0]],                          // 地面に散らす小石。建物の下に隠れてよい
+  gen:[1,14], scrap:[1,15], shop:[2,15], farm:[2,17],
+  man:{ gen:[3,8], scrap:[4,8], shop:[5,8] },   // 得意分野で色が変わる
+};
+// 建物の立ち位置はここで固定する。プレイヤーには動かさせない
+const SITE = { gen:[1,0], farm:[3,0], scrap:[1,2], shop:[3,2] };
+const IDLE_Y = 4;                                // 待機者が並ぶ行
+
+// 廃墟の置き場。手前(解体場に近い側)を後ろに並べてあるので、
+// 掘るほど手前から消えていく
+const RUBBLE = [[7,0],[7,1],[7,2],[7,3],
+                [6,0],[6,1],[6,2],[6,3],
+                [5,0],[5,1],[5,3],
+                [4,1],[4,3]];
+
+// 建物が動いているか。減光と明かりに使う
+const active = k => k==='gen'   ? !S.broken
+                  : k==='scrap' ? (!S.brown && S.deposit>0)
+                  : isLive(k);
+
+function fitCanvas(){
+  const c=$('map'), dpr=Math.min(devicePixelRatio||1, 3);
+  c.width = M.cols*M.T*dpr; c.height = M.rows*M.T*dpr;
+  const g=c.getContext('2d');
+  g.setTransform(dpr,0,0,dpr,0,0);   // バッファを変えると変換が消えるのでここで入れ直す
+  g.imageSmoothingEnabled = false;
+}
+
+function blit(g,[r,c],dx,dy){
+  g.drawImage(SHEET, c*M.SRC, r*M.SRC, M.SRC, M.SRC, dx, dy, M.T, M.T);
+}
+const man = (g,w,tx,ty) => blit(g, SP.man[w.spec], tx*M.T, ty*M.T);
+
+function lamp(g,x,y){
+  const r=30, grd=g.createRadialGradient(x,y,0,x,y,r);
+  grd.addColorStop(0,'rgba(255,216,130,.5)'); grd.addColorStop(1,'rgba(255,216,130,0)');
+  g.fillStyle=grd; g.beginPath(); g.arc(x,y,r,0,Math.PI*2); g.fill();
+}
+
+function drawMap(){
+  const c=$('map'); if(!c || !sheetOK) return;
+  const g=c.getContext('2d'), T=M.T;
+  g.clearRect(0,0,M.cols*T,M.rows*T);
+
+  // 地面と小石。模様は座標から決まるので、開き直しても同じ絵になる
+  for(let y=0;y<M.rows;y++) for(let x=0;x<M.cols;x++){
+    blit(g, SP.ground[(x*7+y*13)%5===0?1:0], x*T, y*T);
+    if((x*13+y*29)%5===0) blit(g, SP.speck[(x+y)%SP.speck.length], x*T, y*T);
+  }
+
+  // 廃墟。埋蔵量に比例して数が減る
+  const n = Math.min(RUBBLE.length, Math.ceil(S.deposit/3000*RUBBLE.length));
+  for(let i=0;i<n;i++){ const [x,y]=RUBBLE[i];
+    blit(g, SP.rubble[(x*3+y)%SP.rubble.length], x*T, y*T); }
+
+  // 建物。止まっている区画は上から沈める。
+  // globalAlpha で建物だけ薄くすると地面が透けて濁るので、区画ごと暗くする
+  ORDER.forEach(k=>{
+    const [x,y]=SITE[k];
+    blit(g, SP[k], x*T, y*T);
+    if(!active(k)){ g.fillStyle='rgba(16,14,28,.42)'; g.fillRect(x*T,y*T,T,T); }
+  });
+
+  // 住民。待機者は下辺に一列、人数が増えたら間隔を詰める
+  const idlers = S.workers.filter(w=>w.at==='idle');
+  const gap = Math.min(.8, 8.6/Math.max(idlers.length,1));
+  idlers.forEach((w,i)=> man(g,w,.5+i*gap, IDLE_Y));
+  ORDER.forEach(k=>{
+    const [bx,by]=SITE[k];
+    at(k).forEach((w,i)=> man(g,w, bx-.35+i*.42, by+.85));
+  });
+  // 着任中は待機所から持ち場へ歩く。eta をそのまま補間に使うので状態は増えない
+  S.workers.filter(w=>w.to).forEach(w=>{
+    const p=1-w.eta/C.moveTime, [bx,by]=SITE[w.to];
+    man(g,w, .5+(bx-.35-.5)*p, IDLE_Y+(by+.85-IDLE_Y)*p);
+  });
+
+  // 夜。明かりは暗くしたあとに乗せる
+  if(isNight()){ g.fillStyle='rgba(14,20,45,.5)'; g.fillRect(0,0,M.cols*T,M.rows*T); }
+  if(!S.brown) ORDER.forEach(k=>{
+    if(!active(k)) return;
+    const [x,y]=SITE[k];
+    lamp(g, x*T+T/2, y*T+T*.72);
+  });
+}
+
 function drawBar(){
   const sup=S.sup, base=baseDraw();
   const scale=Math.max(sup,S.dem,1)*1.12, pct=v=>(v/scale*100)+'%';
@@ -714,7 +820,7 @@ function drawLog(){
 }
 
 function draw(){
-  drawBar(); drawBuildings(); drawUps(); drawAlerts();
+  drawMap(); drawBar(); drawBuildings(); drawUps(); drawAlerts();
   const q=rates();
   setText($('rPop'),`${S.pop}/${popCap()}`);
   setRate('qPop',0,popNote());
@@ -779,6 +885,7 @@ document.addEventListener('pointerdown', e=>{
 });
 
 buildStatic();
+fitCanvas();
 draw();
 
 // ホーム画面から起動したときはオフラインでも動くようにする
