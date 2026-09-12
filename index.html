@@ -146,10 +146,11 @@
   }
 
   /* --- 俯瞰図 --- */
-  /* 論理 512×320 を 1.5 倍まで引き伸ばす。pixelated なのでぼけない */
-  #map{display:block;width:100%;max-width:768px;margin:0 auto 12px;
+  /* 見えているのは 24×16 の世界の一部。枠の比率だけ固定し、中はカメラで動かす */
+  #map{display:block;width:100%;max-width:768px;aspect-ratio:8/5;margin:0 auto 12px;
        image-rendering:pixelated;                 /* ドット絵をぼかさない */
-       border:1px solid var(--line);background:#a4553a}
+       touch-action:none;                         /* ドラッグをページスクロールに渡さない */
+       border:1px solid var(--line);background:#a4553a;cursor:grab}
   /* --- 記号 --- */
   /* currentColor に乗せてあるので、既存の色指定がそのまま効く */
   .ic{width:1em;height:1em;vertical-align:-.14em;fill:none;stroke:currentColor;
@@ -643,7 +644,12 @@ function setHTML(el,v){ if(el && el.dataset.h!==v){ el.innerHTML=v; el.dataset.h
 // ============ 俯瞰図 ============
 // タイルシートの座標の意味は docs/asset-plan.md に書いてある。
 // 素材は 128px 角。論理タイルを 64px にしてあるので、DPR=2 の端末では等倍で出る。
-const M = { cols:8, rows:5, T:64, SRC:128 };
+// 世界は 24×16。コロニーは従来の 8×5 の座標系のまま、描画時に BASE ぶんずらして中央に置く。
+// SITE / ANNEX / RUBBLE / IDLE_Y はコロニー内座標なので書き換えない
+const M = { cols:24, rows:16, T:64, SRC:128, dpr:1, vw:0, vh:0 };
+const BASE = { x:8, y:5, cols:8, rows:5 };
+// カメラ。x,y は表示左上の世界座標(px)、z は倍率。揮発でよいのでセーブしない
+const cam = { x:0, y:0, z:1 };
 const MONO = 'ui-monospace,SFMono-Regular,Menlo,monospace';
 const SHEET = new Image();
 let sheetOK = false;
@@ -689,10 +695,25 @@ const active = k => k==='gen'   ? !S.broken
 
 function fitCanvas(){
   const c=$('map'), dpr=Math.min(devicePixelRatio||1, 3);
-  c.width = M.cols*M.T*dpr; c.height = M.rows*M.T*dpr;
-  const g=c.getContext('2d');
-  g.setTransform(dpr,0,0,dpr,0,0);   // バッファを変えると変換が消えるのでここで入れ直す
-  g.imageSmoothingEnabled = false;
+  M.dpr=dpr; M.vw=c.clientWidth; M.vh=c.clientHeight;
+  c.width = M.vw*dpr; c.height = M.vh*dpr;   // バッファは表示枠ぶんだけ。変換は毎フレーム drawMap で入れる
+  clampCam();
+}
+
+// ズームは世界がちょうど収まる倍率〜2倍。カメラは世界の外を見せない
+function clampCam(){
+  const minZ = Math.max(M.vw/(M.cols*M.T), M.vh/(M.rows*M.T));
+  cam.z = Math.min(2, Math.max(minZ, cam.z));
+  cam.x = Math.min(Math.max(cam.x, 0), M.cols*M.T - M.vw/cam.z);
+  cam.y = Math.min(Math.max(cam.y, 0), M.rows*M.T - M.vh/cam.z);
+}
+
+// コロニーを画面中央に置く。起動時に使う
+function homeCam(){
+  cam.z = 1;
+  cam.x = (BASE.x + BASE.cols/2)*M.T - M.vw/2;
+  cam.y = (BASE.y + BASE.rows/2)*M.T - M.vh/2;
+  clampCam();
 }
 
 function blit(g,[r,c],dx,dy){
@@ -718,14 +739,22 @@ function nightAmt(){
 
 function drawMap(){
   const c=$('map'); if(!c || !sheetOK) return;
-  const g=c.getContext('2d'), T=M.T;
-  g.clearRect(0,0,M.cols*T,M.rows*T);
+  const g=c.getContext('2d'), T=M.T, sc=M.dpr*cam.z;
+  g.setTransform(sc,0,0,sc,-cam.x*sc,-cam.y*sc);
+  g.imageSmoothingEnabled = false;   // バッファのリサイズで消えるので毎回入れる
+  g.clearRect(cam.x,cam.y,M.vw/cam.z,M.vh/cam.z);
 
-  // 地面と小石。模様は座標から決まるので、開き直しても同じ絵になる
-  for(let y=0;y<M.rows;y++) for(let x=0;x<M.cols;x++){
+  // 地面と小石。模様は座標から決まるので、開き直しても同じ絵になる。
+  // 画面に入る範囲だけ敷く(世界全体だと毎フレーム 384 マスになる)
+  const x0=Math.max(0,Math.floor(cam.x/T)), x1=Math.min(M.cols,Math.ceil((cam.x+M.vw/cam.z)/T));
+  const y0=Math.max(0,Math.floor(cam.y/T)), y1=Math.min(M.rows,Math.ceil((cam.y+M.vh/cam.z)/T));
+  for(let y=y0;y<y1;y++) for(let x=x0;x<x1;x++){
     blit(g, SP.ground[(x*7+y*13)%5===0?1:0], x*T, y*T);
     if((x*13+y*29)%5===0) blit(g, SP.speck[(x+y)%SP.speck.length], x*T, y*T);
   }
+
+  // ここから先はぜんぶコロニー内座標。原点を区画の左上へ移す
+  g.translate(BASE.x*T, BASE.y*T);
 
   // 廃墟。埋蔵量に比例して数が減る
   const n = Math.min(RUBBLE.length, Math.ceil(S.deposit/3000*RUBBLE.length));
@@ -758,14 +787,14 @@ function drawMap(){
 
   // 夜。明かりは暗くしたあとに乗せる
   const nt=nightAmt(), W=M.cols*T, H=M.rows*T;
-  if(nt>0){ g.fillStyle=`rgba(14,20,45,${.52*nt})`; g.fillRect(0,0,W,H); }
+  if(nt>0){ g.fillStyle=`rgba(14,20,45,${.52*nt})`; g.fillRect(-BASE.x*T,-BASE.y*T,W,H); }
   if(!S.brown) DRAW.forEach(k=>{
     if(!active(k)) return;
     const [x,y]=SITE[k];
     lamp(g, x*T+T/2, y*T+T*.72, .2+.35*nt);
   });
   // 停電。明かりが消えたうえに、盤面全体が赤く沈む
-  if(S.brown){ g.fillStyle='rgba(150,36,18,.2)'; g.fillRect(0,0,W,H); }
+  if(S.brown){ g.fillStyle='rgba(150,36,18,.2)'; g.fillRect(-BASE.x*T,-BASE.y*T,W,H); }
 
   // 稼働人数。夜でも読めるよう、暗くしたあとに乗せる
   g.font = '600 15px '+MONO; g.textAlign='center'; g.textBaseline='middle';
@@ -973,13 +1002,51 @@ document.addEventListener('pointerdown', e=>{
   draw();
 });
 
+// ============ 盤面のパンとズーム ============
+// 1本指ドラッグで移動、2本指の間隔で拡縮。一時停止中はループが描かないので自前で drawMap を呼ぶ
+{
+  const c=$('map'), pts=new Map();
+  let pz=1, pd=0;   // ピンチ開始時の倍率と指の間隔
+  const dist=()=>{ const [a,b]=[...pts.values()]; return Math.hypot(a.x-b.x,a.y-b.y); };
+  c.addEventListener('pointerdown',e=>{
+    c.setPointerCapture(e.pointerId);
+    pts.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(pts.size===2){ pz=cam.z; pd=dist(); }
+  });
+  c.addEventListener('pointermove',e=>{
+    const p=pts.get(e.pointerId); if(!p) return;
+    if(pts.size===1){ cam.x-=(e.clientX-p.x)/cam.z; cam.y-=(e.clientY-p.y)/cam.z; }
+    p.x=e.clientX; p.y=e.clientY;
+    if(pts.size===2 && pd>0){
+      // 2本指の中点の下にある地点を止めたまま倍率だけ変える
+      const r=c.getBoundingClientRect(), [a,b]=[...pts.values()];
+      const mx=(a.x+b.x)/2-r.left, my=(a.y+b.y)/2-r.top;
+      const wx=cam.x+mx/cam.z, wy=cam.y+my/cam.z;
+      cam.z=pz*dist()/pd; clampCam();
+      cam.x=wx-mx/cam.z; cam.y=wy-my/cam.z;
+    }
+    clampCam(); drawMap();
+  });
+  const up=e=>pts.delete(e.pointerId);
+  c.addEventListener('pointerup',up); c.addEventListener('pointercancel',up);
+  c.addEventListener('wheel',e=>{   // PC で確かめる用
+    e.preventDefault();
+    const wx=cam.x+e.offsetX/cam.z, wy=cam.y+e.offsetY/cam.z;
+    cam.z*=e.deltaY<0?1.1:1/1.1; clampCam();
+    cam.x=wx-e.offsetX/cam.z; cam.y=wy-e.offsetY/cam.z;
+    clampCam(); drawMap();
+  },{passive:false});
+}
+
 // 壊れたセーブや、保存が禁じられた文脈(プライベート閲覧など)でも起動できるようにする
 try{ if(!load()) init(); }
 catch(e){ try{ localStorage.removeItem(KEY); }catch(_){} init(); }
 
 buildStatic();
 fitCanvas();
+homeCam();
 draw();
+addEventListener('resize',()=>{ fitCanvas(); drawMap(); });
 
 // ホーム画面から起動したときはオフラインでも動くようにする
 if('serviceWorker' in navigator){
