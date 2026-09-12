@@ -824,16 +824,20 @@ function lamp(g,x,y,a){
 }
 
 // 道。タイル絵ではなく帯を手で描く(シートの小道タイルは絵柄の出入口が揃っておらず繋がらない)。
-// マスの中心から、繋がっている辺の中点まで太い線を伸ばすと、隣のマスと必ず届く
-function drawRoad(g,x,y,T){
-  const cx=(x+.5)*T, cy=(y+.5)*T;
+// マスの中心から、繋がっている辺の中点まで太い線を伸ばすと、隣のマスと必ず届く。
+// マスごとに縁→舗装と描くと、隣マスの縁が自分の舗装の上に被って切れ目が出るので、
+// 全マスの縁を先に、舗装を後に、レイヤー単位でまとめて描く
+function drawRoads(g,tiles,T){
   const conn=(nx,ny)=>hasRoad(nx,ny)||hasJob(nx,ny)||inColony(nx,ny);
   g.lineCap='round';
   // 外側に暗い縁、内側に舗装色。シートの小道と同系の灰にしてある
   [[.36,'#6d5c4c'],[.24,'#aab6bd']].forEach(([wd,col])=>{
     g.strokeStyle=col; g.lineWidth=T*wd;
     g.beginPath();
-    NB.forEach(([dx,dy])=>{ if(conn(x+dx,y+dy)){ g.moveTo(cx,cy); g.lineTo(cx+dx*T/2, cy+dy*T/2); } });
+    tiles.forEach(([x,y])=>{
+      const cx=(x+.5)*T, cy=(y+.5)*T;
+      NB.forEach(([dx,dy])=>{ if(conn(x+dx,y+dy)){ g.moveTo(cx,cy); g.lineTo(cx+dx*T/2, cy+dy*T/2); } });
+    });
     g.stroke();
   });
 }
@@ -865,8 +869,8 @@ function drawMap(){
   }
 
   // 道と、その予定地(薄く)。鉱床は残りが多いほど大きな岩で、掘り尽くすと消える
-  S.roads.forEach(([x,y])=> drawRoad(g,x,y,T));
-  S.jobs.forEach(j=>{ g.globalAlpha=.45; drawRoad(g,j.x,j.y,T); g.globalAlpha=1; });
+  drawRoads(g,S.roads,T);
+  g.globalAlpha=.45; drawRoads(g,S.jobs.map(j=>[j.x,j.y]),T); g.globalAlpha=1;
   S.ores.forEach(o=> blit(g, SP.rubble[Math.min(3, Math.floor(o.amt/500))], o.x*T, o.y*T));
 
   // 道モード中は、コロニー区画の枠と「いま置けるマス」を見せる。
