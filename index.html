@@ -655,11 +655,24 @@ const SP = {
   // 廃墟は灰色の岩。赤い岩(4行目)だと地面と同系色で沈む
   rubble:[[5,2],[5,3],[5,4],[5,5]],
   speck:[[5,0],[4,0]],                          // 地面に散らす小石。建物の下に隠れてよい
-  gen:[1,14], scrap:[1,15], shop:[2,15], farm:[2,17],
+  gen:[1,14], scrap:[1,15], shop:[2,15], farm:[2,17], house:[0,17],
   man:{ gen:[3,8], scrap:[4,8], shop:[5,8] },   // 得意分野で色が変わる
 };
 // 建物の立ち位置はここで固定する。プレイヤーには動かさせない
-const SITE = { gen:[1,0], farm:[3,0], scrap:[1,2], shop:[3,2] };
+const SITE = { gen:[1,0], farm:[3,0], scrap:[1,2], shop:[3,2], house:[2,0] };
+// 盤面に絵を持つもの。ORDER は人手の勘定と下のパネルにも使うので、居住区はこちらにだけ足す
+const DRAW = [...ORDER, 'house'];
+
+// 増築。レベルが1上がるごとに、決まった場所に小物が1つ増える。
+// 同じ建物の Lv2 版という絵は素材に無いので、本体は変えずに周りを建て込ませている。
+// 置き場は SITE と同じで固定。増えるのは Lv3 までで、それ以降は見た目が変わらない。
+// 人手を持つ建物の真下は 3/5 の表示が乗るので空けてある(居住区だけは真下に伸ばせる)
+const ANNEX = {
+  gen:   [{at:[0,0], sp:[6,0]}, {at:[0,1], sp:[0,15]}],   // 煙突 → タンク。左に敷地が伸びる
+  house: [{at:[2,1], sp:[0,16]}, {at:[2,2], sp:[0,16]}],  // 同じ棟が下に伸びる
+  scrap: [{at:[0,2], sp:[6,2]}, {at:[0,3], sp:[6,3]}],    // 解体した箱が積まれる
+  shop:  [{at:[4,2], sp:[6,1]}, {at:[5,2], sp:[0,16]}],   // 配管 → 資材コンテナ
+};
 const IDLE_Y = 4;                                // 待機者が並ぶ行
 
 // 廃墟の置き場。手前(解体場に近い側)を後ろに並べてあるので、
@@ -719,12 +732,15 @@ function drawMap(){
   for(let i=0;i<n;i++){ const [x,y]=RUBBLE[i];
     blit(g, SP.rubble[(x*3+y)%SP.rubble.length], x*T, y*T); }
 
-  // 建物。止まっている区画は上から沈める。
+  // 建物と、レベルぶんの増築。止まっている区画は上から沈める。
   // globalAlpha で建物だけ薄くすると地面が透けて濁るので、区画ごと暗くする
-  ORDER.forEach(k=>{
-    const [x,y]=SITE[k];
-    blit(g, SP[k], x*T, y*T);
-    if(!active(k)){ g.fillStyle='rgba(16,14,28,.42)'; g.fillRect(x*T,y*T,T,T); }
+  DRAW.forEach(k=>{
+    const on = active(k);
+    [[SITE[k], SP[k]], ...(ANNEX[k]||[]).slice(0, S.lv[k]-1).map(a=>[a.at, a.sp])]
+      .forEach(([[x,y],sp])=>{
+        blit(g, sp, x*T, y*T);
+        if(!on){ g.fillStyle='rgba(16,14,28,.42)'; g.fillRect(x*T,y*T,T,T); }
+      });
   });
 
   // 住民。待機者は下辺に一列、人数が増えたら間隔を詰める
@@ -743,7 +759,7 @@ function drawMap(){
   // 夜。明かりは暗くしたあとに乗せる
   const nt=nightAmt(), W=M.cols*T, H=M.rows*T;
   if(nt>0){ g.fillStyle=`rgba(14,20,45,${.52*nt})`; g.fillRect(0,0,W,H); }
-  if(!S.brown) ORDER.forEach(k=>{
+  if(!S.brown) DRAW.forEach(k=>{
     if(!active(k)) return;
     const [x,y]=SITE[k];
     lamp(g, x*T+T/2, y*T+T*.72, .2+.35*nt);
