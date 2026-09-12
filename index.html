@@ -869,6 +869,25 @@ function drawMap(){
   S.jobs.forEach(j=>{ g.globalAlpha=.45; drawRoad(g,j.x,j.y,T); g.globalAlpha=1; });
   S.ores.forEach(o=> blit(g, SP.rubble[Math.min(3, Math.floor(o.amt/500))], o.x*T, o.y*T));
 
+  // 道モード中は、コロニー区画の枠と「いま置けるマス」を見せる。
+  // タップが黙って無視されるのを減らす案内で、判定は roadTap と同じ式。
+  // スクラップが足りないときは赤にして、置けない理由が色で分かるようにする
+  if(roadMode){
+    g.strokeStyle='rgba(211,160,60,.9)'; g.lineWidth=2; g.setLineDash([8,6]);
+    g.strokeRect(BASE.x*T+1, BASE.y*T+1, BASE.cols*T-2, BASE.rows*T-2);
+    g.setLineDash([]);
+    const can=S.scrap>=C.roadCost;
+    const a=.14+.10*(Math.sin(S.t*5)+1)/2;   // 一時停止中も見えるよう、下限を残して脈打たせる
+    for(let y=y0;y<y1;y++) for(let x=x0;x<x1;x++){
+      if(inColony(x,y)||hasRoad(x,y)||hasJob(x,y)||oreAt(x,y)||!touches(x,y,true)) continue;
+      g.fillStyle = can ? `rgba(232,228,220,${a})` : `rgba(224,90,60,${a})`;
+      g.fillRect(x*T+3, y*T+3, T-6, T-6);
+      g.strokeStyle = can ? 'rgba(232,228,220,.55)' : 'rgba(224,90,60,.55)';
+      g.lineWidth=1;
+      g.strokeRect(x*T+3.5, y*T+3.5, T-7, T-7);
+    }
+  }
+
   // ここから先はぜんぶコロニー内座標。原点を区画の左上へ移す
   g.translate(BASE.x*T, BASE.y*T);
 
