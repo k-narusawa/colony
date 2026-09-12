@@ -828,7 +828,9 @@ function lamp(g,x,y,a){
 // マスごとに縁→舗装と描くと、隣マスの縁が自分の舗装の上に被って切れ目が出るので、
 // 全マスの縁を先に、舗装を後に、レイヤー単位でまとめて描く
 function drawRoads(g,tiles,T){
-  const conn=(nx,ny)=>hasRoad(nx,ny)||hasJob(nx,ny)||inColony(nx,ny);
+  // コロニー区画は接続先に数えない。区画の何もない地面へ枝が伸びて、
+  // 道の先がないのに曲がって見えるため。孤立マスは点として見せる
+  const conn=(nx,ny)=>hasRoad(nx,ny)||hasJob(nx,ny);
   g.lineCap='round';
   // 外側に暗い縁、内側に舗装色。シートの小道と同系の灰にしてある
   [[.36,'#6d5c4c'],[.24,'#aab6bd']].forEach(([wd,col])=>{
@@ -836,7 +838,9 @@ function drawRoads(g,tiles,T){
     g.beginPath();
     tiles.forEach(([x,y])=>{
       const cx=(x+.5)*T, cy=(y+.5)*T;
-      NB.forEach(([dx,dy])=>{ if(conn(x+dx,y+dy)){ g.moveTo(cx,cy); g.lineTo(cx+dx*T/2, cy+dy*T/2); } });
+      let n=0;
+      NB.forEach(([dx,dy])=>{ if(conn(x+dx,y+dy)){ n++; g.moveTo(cx,cy); g.lineTo(cx+dx*T/2, cy+dy*T/2); } });
+      if(!n){ g.moveTo(cx,cy); g.lineTo(cx+.01,cy); }
     });
     g.stroke();
   });
