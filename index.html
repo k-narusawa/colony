@@ -146,10 +146,11 @@
   }
 
   /* --- 俯瞰図 --- */
-  /* 論理 512×320 を 1.5 倍まで引き伸ばす。pixelated なのでぼけない */
-  #map{display:block;width:100%;max-width:768px;margin:0 auto 12px;
+  /* 見えているのは 24×16 の世界の一部。枠の比率だけ固定し、中はカメラで動かす */
+  #map{display:block;width:100%;max-width:768px;aspect-ratio:8/5;margin:0 auto 12px;
        image-rendering:pixelated;                 /* ドット絵をぼかさない */
-       border:1px solid var(--line);background:#a4553a}
+       touch-action:none;                         /* ドラッグをページスクロールに渡さない */
+       border:1px solid var(--line);background:#a4553a;cursor:grab}
   /* --- 記号 --- */
   /* currentColor に乗せてあるので、既存の色指定がそのまま効く */
   .ic{width:1em;height:1em;vertical-align:-.14em;fill:none;stroke:currentColor;
@@ -202,6 +203,7 @@
     <button data-sp="1" aria-pressed="false">等速</button>
     <button data-sp="2" aria-pressed="true">2倍速</button>
     <button data-sp="4" aria-pressed="false">4倍速</button>
+    <button id="roadBtn" aria-pressed="false">道を敷く <svg class="ic"><use href="#i-scrap"/></svg>10</button>
     <button id="wipeBtn" class="wipe">やり直す</button>
   </div>
 
@@ -284,6 +286,10 @@ const C = {
   specMatch:1, specMiss:.6,
   sessionSec:600,     // バランス確認の観測窓。balance-check.js だけが使う
 
+  roadCost:10,        // 道1マスに要るスクラップ
+  roadBuildT:15,      // 1マスの敷設にかかる作業秒数(行き帰りは moveTime)
+  oreInit:3, oreMin:800, oreVar:800, oreEvent:1200,   // 鉱床の初期数と埋蔵量
+
   offlineCap:8*3600    // 留守のぶんを計算する上限。これより長く離れても8時間ぶん
 };
 const UPS = [
@@ -311,16 +317,49 @@ const mkWorker = () => ({ name:nextName(), spec:SPECS[Math.floor(Math.random()*S
                           at:'idle', eta:0, to:null });
 const who = w => `${w.name}(${SPEC[w.spec]})`;
 
+// ============ 世界と鉱床 ============
+// 世界は 24×16。コロニーは従来の 8×5 の座標系のまま、世界の中央に BASE で置く。
+// SITE / ANNEX / RUBBLE / IDLE_Y はコロニー内座標、鉱床と道は世界座標で持つ
+const WORLD = { cols:24, rows:16 };
+const BASE  = { x:8, y:5, cols:8, rows:5 };
+const NB = [[1,0],[-1,0],[0,1],[0,-1]];
+const inColony = (x,y) => x>=BASE.x && x<BASE.x+BASE.cols && y>=BASE.y && y<BASE.y+BASE.rows;
+const hasRoad  = (x,y) => S.roads.some(r=>r[0]===x&&r[1]===y);
+const hasJob   = (x,y) => S.jobs.some(j=>j.x===x&&j.y===y);
+const oreAt    = (x,y) => S.ores.find(o=>o.x===x&&o.y===y);
+// コロニーか道に4方向で接しているか。道はここを満たす場所にしか置けないので、
+// つながっているかの判定はこの1関数で足り、経路探索は要らない
+const touches  = (x,y,jobs) => NB.some(([dx,dy])=>{
+  const nx=x+dx, ny=y+dy;
+  return inColony(nx,ny) || hasRoad(nx,ny) || (jobs && hasJob(nx,ny));
+});
+const oreOpen  = o => touches(o.x,o.y,false);   // 道が届いた鉱床だけ掘れる
+const minable  = () => S.deposit + S.ores.filter(oreOpen).reduce((a,o)=>a+o.amt,0);
+
+// 空きマスに鉱床を1つ湧かせる。コロニーの周囲2マスは避けて、道を敷く距離を残す
+function spawnOre(amt){
+  for(let i=0;i<80;i++){
+    const x=Math.floor(Math.random()*WORLD.cols), y=Math.floor(Math.random()*WORLD.rows);
+    if(x>=BASE.x-2 && x<BASE.x+BASE.cols+2 && y>=BASE.y-2 && y<BASE.y+BASE.rows+2) continue;
+    if(oreAt(x,y) || hasRoad(x,y) || hasJob(x,y)) continue;
+    S.ores.push({x,y,amt});
+    return true;
+  }
+  return false;   // 置き場が無いほど埋まっているなら諦める
+}
+
 // ============ 状態 ============
 let S, running=false, speed=2, lastMs=0, logSeq=0;
 
 function init(){
-  S = { t:0, pop:5, workers:[], food:C.foodCap, scrap:0, parts:0, deposit:3000, growth:0,
+  S = { t:0, pop:5, workers:[], food:C.foodCap, scrap:0, parts:0, deposit:1000, growth:0,
         farmOn:true, shopOn:true, lv:{gen:1,house:1,scrap:1,shop:1,farm:1},
         broken:false, repairT:0, cold:0, coldLeft:0, nextEv:70, log:[], _night:false,
         starveT:0, brownT:0,
         farmLive:false, shopLive:false, sup:0, dem:0, brown:false,
-        freeFarm:0, freeShop:0 };   // tick 前に draw が走るので、ここで 0 を入れておく
+        freeFarm:0, freeShop:0,     // tick 前に draw が走るので、ここで 0 を入れておく
+        ores:[], roads:[], jobs:[] };
+  for(let i=0;i<C.oreInit;i++) spawnOre(C.oreMin+Math.floor(Math.random()*C.oreVar));
   namePool=[];
   // 初期メンバーは3分野を1人ずつ保証する。整備が誰もいない引きは
   // 挑戦ではなく詰みになるので、そこだけ運から外す
@@ -330,6 +369,7 @@ function init(){
     S.workers.push(w);
   }
   log('得意分野に合った持ち場ほどよく働く。＋は適任を自動で選ぶ');
+  log('離れた鉱床は、道を繋ぐと解体場が掘れるようになる');
 }
 // ============ 保存と、留守にしていたあいだの進行 ============
 // 進みは実時刻の差で出す(フレーム数で数えると、裏に回ったタブで止まる)。
@@ -381,6 +421,9 @@ function load(){
   S=d.S; namePool=d.pool||[];
   // 農場の強化を足す前のセーブには lv.farm が無い。欠けたまま計算すると全部 NaN になる
   if(!S.lv.farm) S.lv.farm=1;
+  // 鉱床と道を足す前のセーブにはどちらも無い。埋蔵量は残っているぶんそのままに、鉱床だけ湧かせる
+  if(!S.ores){ S.ores=[]; S.roads=[]; S.jobs=[];
+    for(let i=0;i<C.oreInit;i++) spawnOre(C.oreMin+Math.floor(Math.random()*C.oreVar)); }
   d.cost.forEach((c,i)=>{ if(UPS[i]) UPS[i].cost=c; });
   logSeq=S.log.length ? S.log[0].id : 0;
   catchUpTo(d.t);
@@ -443,7 +486,7 @@ const stamp = t => `${Math.floor(t/CYCLE)+1}日目${(t%CYCLE)>=C.dayLen?' 夜':'
 // step() と同じ式。表示だけなので dt を掛けず毎秒あたりで返す
 function rates(){
   const m=mult();
-  const scr = (S.brown||S.deposit<=0) ? 0 : eff('scrap')*C.scrapPerMan*m;
+  const scr = (S.brown||minable()<=0) ? 0 : eff('scrap')*C.scrapPerMan*m;
   const prt = S.shopLive ? Math.min(eff('shop')*C.partsPerMan*m, S.scrap/C.scrapPerPart) : 0;
   return { food:(S.farmLive?foodOut():0)-S.pop*C.foodPerPop,
            scrap:scr-prt*C.scrapPerPart, parts:prt, dep:-scr };
@@ -468,11 +511,36 @@ function step(dt){
 
   if(S.coldLeft>0){ S.coldLeft-=dt; if(S.coldLeft<=0){ S.cold=0; log('寒波が去った','good'); } }
 
-  S.workers.forEach(w=>{ if(w.eta>0){ w.eta-=dt; if(w.eta<=0){ w.at=w.to; w.to=null; } } });
+  S.workers.forEach(w=>{ if(w.eta>0){ w.eta-=dt; if(w.eta<=0){
+    w.at=w.to; w.to=null;
+    if(w.at==='idle') w.job=null;   // 道普請から帰り着いた。job は帰り道の描画に使うのでここで消す
+  } } });
 
   if(S.repairT>0 && cnt('gen')>0){
     S.repairT -= dt*eff('gen');   // 整備が得意なほど早く直る。人数を足しても早くなる
     if(S.repairT<=0){ S.broken=false; log('発電機を復旧した','good'); }
+  }
+
+  // --- 道普請 ---
+  // 予約1件につき待機者が1人向かう。歩き(moveTime)→現地で roadBuildT 働く→歩いて戻る
+  for(const j of [...S.jobs]){
+    const w=S.workers.find(w=>w.job && w.job[0]===j.x && w.job[1]===j.y
+                            && (w.at==='build' || w.to==='build'));
+    if(!w){
+      const p=at('idle')[0];
+      if(p){ p.job=[j.x,j.y]; p.at='moving'; p.to='build'; p.eta=C.moveTime; }
+      continue;
+    }
+    if(w.at!=='build') continue;               // まだ歩いている
+    j.left-=dt;
+    if(j.left<=0){
+      S.roads.push([j.x,j.y]);
+      S.jobs.splice(S.jobs.indexOf(j),1);
+      w.at='moving'; w.to='idle'; w.eta=C.moveTime;
+      S._dep=false;
+      if(S.ores.some(o=>oreOpen(o) && NB.some(([dx,dy])=>o.x===j.x+dx&&o.y===j.y+dy)))
+        log('道が鉱床に届いた。解体場が掘り始める','good');
+    }
   }
 
   // --- 給電 ---
@@ -504,9 +572,17 @@ function step(dt){
 
   const m=mult();
   if(!S.brown){
-    const got=Math.min(S.deposit, eff('scrap')*C.scrapPerMan*m*dt);
-    S.deposit-=got; S.scrap+=got;
-    if(S.deposit<=0 && !S._dep){ log('廃墟を掘り尽くした','bad'); S._dep=true; }
+    let want=eff('scrap')*C.scrapPerMan*m*dt;
+    const dig=Math.min(S.deposit,want); S.deposit-=dig; S.scrap+=dig; want-=dig;
+    // 手元の廃墟を掘り終えたら、道が届いている鉱床を湧いた順に崩す
+    for(const o of S.ores){
+      if(want<=0) break;
+      if(!oreOpen(o)) continue;
+      const g=Math.min(o.amt,want); o.amt-=g; S.scrap+=g; want-=g;
+      if(o.amt<=0) log('鉱床をひとつ掘り尽くした');
+    }
+    S.ores=S.ores.filter(o=>o.amt>0);
+    if(minable()<=0 && !S._dep){ log('掘れる場所が尽きた。道を延ばして鉱床へ','bad'); S._dep=true; }
   }
   if(S.shopLive){
     let want=eff('shop')*C.partsPerMan*m*dt, need=want*C.scrapPerPart;
@@ -549,7 +625,11 @@ function fireEvent(){
   switch(pool[Math.floor(Math.random()*pool.length)]){
     case 'break':   S.broken=true; S.repairT=0; log('発電機が故障した。出力が半減','bad'); break;
     case 'cold':    S.cold=3; S.coldLeft=120; log('寒波。居住区の消費が +3kW','bad'); break;
-    case 'ruin':    S.deposit+=1200; S._dep=false; log('新しい廃墟を見つけた。埋蔵量 +1200','good'); break;
+    case 'ruin':
+      if(spawnOre(C.oreEvent)) log('新しい鉱床を見つけた。道を繋げば掘れる','good');
+      else { S.deposit+=C.oreEvent; S._dep=false;   // 置き場が無いときだけ昔ながらの廃墟扱い
+             log(`新しい廃墟を見つけた。埋蔵量 +${C.oreEvent}`,'good'); }
+      break;
     case 'migrant': { S.pop+=2;
                     const a=mkWorker(), b=mkWorker(); S.workers.push(a,b);
                     log(`移民が到着した — ${who(a)} と ${who(b)}`); break; }
@@ -580,6 +660,25 @@ function buy(i){
 function repair(){
   if(S.parts<30||S.repairT>0||!S.broken) return;
   S.parts-=30; S.repairT=20; log('修理を開始した。整備員が必要');
+}
+// 道の敷設。roadMode 中に盤面をタップすると1マス予約する。
+// コロニーか道(予約中も含む)に接するマスにしか置けないので、
+// 敷けた道は必ずコロニーと繋がっている
+let roadMode=false;
+function roadTap(x,y){
+  if(x<0||y<0||x>=WORLD.cols||y>=WORLD.rows) return;
+  const j=S.jobs.find(j=>j.x===x&&j.y===y);
+  if(j){   // 予約をもう一度タップで取り消し。返金して、向かった住民は引き返す
+    S.scrap+=C.roadCost; S.jobs.splice(S.jobs.indexOf(j),1);
+    const w=S.workers.find(w=>w.job&&w.job[0]===x&&w.job[1]===y&&(w.at==='build'||w.to==='build'));
+    if(w){ w.eta = w.at==='build' ? C.moveTime : Math.max(.1, C.moveTime-w.eta);
+           w.at='moving'; w.to='idle'; }
+    return;
+  }
+  if(inColony(x,y) || hasRoad(x,y) || oreAt(x,y)) return;   // 置けない場所は黙って無視
+  if(!touches(x,y,true) || S.scrap<C.roadCost) return;
+  S.scrap-=C.roadCost;
+  S.jobs.push({x,y,left:C.roadBuildT});
 }
 
 // ============ DOMを一度だけ組む ============
@@ -643,7 +742,10 @@ function setHTML(el,v){ if(el && el.dataset.h!==v){ el.innerHTML=v; el.dataset.h
 // ============ 俯瞰図 ============
 // タイルシートの座標の意味は docs/asset-plan.md に書いてある。
 // 素材は 128px 角。論理タイルを 64px にしてあるので、DPR=2 の端末では等倍で出る。
-const M = { cols:8, rows:5, T:64, SRC:128 };
+// 世界のサイズとコロニーの位置(WORLD / BASE)はシミュレーション部の頭で決めている
+const M = { T:64, SRC:128, dpr:1, vw:0, vh:0 };
+// カメラ。x,y は表示左上の世界座標(px)、z は倍率。揮発でよいのでセーブしない
+const cam = { x:0, y:0, z:1 };
 const MONO = 'ui-monospace,SFMono-Regular,Menlo,monospace';
 const SHEET = new Image();
 let sheetOK = false;
@@ -684,15 +786,30 @@ const RUBBLE = [[7,0],[7,1],[7,2],[7,3],
 
 // 建物が動いているか。減光と明かりに使う
 const active = k => k==='gen'   ? !S.broken
-                  : k==='scrap' ? (!S.brown && S.deposit>0)
+                  : k==='scrap' ? (!S.brown && minable()>0)
                   : isLive(k);
 
 function fitCanvas(){
   const c=$('map'), dpr=Math.min(devicePixelRatio||1, 3);
-  c.width = M.cols*M.T*dpr; c.height = M.rows*M.T*dpr;
-  const g=c.getContext('2d');
-  g.setTransform(dpr,0,0,dpr,0,0);   // バッファを変えると変換が消えるのでここで入れ直す
-  g.imageSmoothingEnabled = false;
+  M.dpr=dpr; M.vw=c.clientWidth; M.vh=c.clientHeight;
+  c.width = M.vw*dpr; c.height = M.vh*dpr;   // バッファは表示枠ぶんだけ。変換は毎フレーム drawMap で入れる
+  clampCam();
+}
+
+// ズームは世界がちょうど収まる倍率〜2倍。カメラは世界の外を見せない
+function clampCam(){
+  const minZ = Math.max(M.vw/(WORLD.cols*M.T), M.vh/(WORLD.rows*M.T));
+  cam.z = Math.min(2, Math.max(minZ, cam.z));
+  cam.x = Math.min(Math.max(cam.x, 0), WORLD.cols*M.T - M.vw/cam.z);
+  cam.y = Math.min(Math.max(cam.y, 0), WORLD.rows*M.T - M.vh/cam.z);
+}
+
+// コロニーを画面中央に置く。起動時に使う
+function homeCam(){
+  cam.z = 1;
+  cam.x = (BASE.x + BASE.cols/2)*M.T - M.vw/2;
+  cam.y = (BASE.y + BASE.rows/2)*M.T - M.vh/2;
+  clampCam();
 }
 
 function blit(g,[r,c],dx,dy){
@@ -704,6 +821,21 @@ function lamp(g,x,y,a){
   const r=30, grd=g.createRadialGradient(x,y,0,x,y,r);
   grd.addColorStop(0,`rgba(255,216,130,${a})`); grd.addColorStop(1,'rgba(255,216,130,0)');
   g.fillStyle=grd; g.beginPath(); g.arc(x,y,r,0,Math.PI*2); g.fill();
+}
+
+// 道。タイル絵ではなく帯を手で描く(シートの小道タイルは絵柄の出入口が揃っておらず繋がらない)。
+// マスの中心から、繋がっている辺の中点まで太い線を伸ばすと、隣のマスと必ず届く
+function drawRoad(g,x,y,T){
+  const cx=(x+.5)*T, cy=(y+.5)*T;
+  const conn=(nx,ny)=>hasRoad(nx,ny)||hasJob(nx,ny)||inColony(nx,ny);
+  g.lineCap='round';
+  // 外側に暗い縁、内側に舗装色。シートの小道と同系の灰にしてある
+  [[.36,'#6d5c4c'],[.24,'#aab6bd']].forEach(([wd,col])=>{
+    g.strokeStyle=col; g.lineWidth=T*wd;
+    g.beginPath();
+    NB.forEach(([dx,dy])=>{ if(conn(x+dx,y+dy)){ g.moveTo(cx,cy); g.lineTo(cx+dx*T/2, cy+dy*T/2); } });
+    g.stroke();
+  });
 }
 
 // 夜の濃さを 0→1 で返す。二値で切り替えると日没が唐突なので、
@@ -718,17 +850,49 @@ function nightAmt(){
 
 function drawMap(){
   const c=$('map'); if(!c || !sheetOK) return;
-  const g=c.getContext('2d'), T=M.T;
-  g.clearRect(0,0,M.cols*T,M.rows*T);
+  const g=c.getContext('2d'), T=M.T, sc=M.dpr*cam.z;
+  g.setTransform(sc,0,0,sc,-cam.x*sc,-cam.y*sc);
+  g.imageSmoothingEnabled = false;   // バッファのリサイズで消えるので毎回入れる
+  g.clearRect(cam.x,cam.y,M.vw/cam.z,M.vh/cam.z);
 
-  // 地面と小石。模様は座標から決まるので、開き直しても同じ絵になる
-  for(let y=0;y<M.rows;y++) for(let x=0;x<M.cols;x++){
+  // 地面と小石。模様は座標から決まるので、開き直しても同じ絵になる。
+  // 画面に入る範囲だけ敷く(世界全体だと毎フレーム 384 マスになる)
+  const x0=Math.max(0,Math.floor(cam.x/T)), x1=Math.min(WORLD.cols,Math.ceil((cam.x+M.vw/cam.z)/T));
+  const y0=Math.max(0,Math.floor(cam.y/T)), y1=Math.min(WORLD.rows,Math.ceil((cam.y+M.vh/cam.z)/T));
+  for(let y=y0;y<y1;y++) for(let x=x0;x<x1;x++){
     blit(g, SP.ground[(x*7+y*13)%5===0?1:0], x*T, y*T);
     if((x*13+y*29)%5===0) blit(g, SP.speck[(x+y)%SP.speck.length], x*T, y*T);
   }
 
+  // 道と、その予定地(薄く)。鉱床は残りが多いほど大きな岩で、掘り尽くすと消える
+  S.roads.forEach(([x,y])=> drawRoad(g,x,y,T));
+  S.jobs.forEach(j=>{ g.globalAlpha=.45; drawRoad(g,j.x,j.y,T); g.globalAlpha=1; });
+  S.ores.forEach(o=> blit(g, SP.rubble[Math.min(3, Math.floor(o.amt/500))], o.x*T, o.y*T));
+
+  // 道モード中は、コロニー区画の枠と「いま置けるマス」を見せる。
+  // タップが黙って無視されるのを減らす案内で、判定は roadTap と同じ式。
+  // スクラップが足りないときは赤にして、置けない理由が色で分かるようにする
+  if(roadMode){
+    g.strokeStyle='rgba(211,160,60,.9)'; g.lineWidth=2; g.setLineDash([8,6]);
+    g.strokeRect(BASE.x*T+1, BASE.y*T+1, BASE.cols*T-2, BASE.rows*T-2);
+    g.setLineDash([]);
+    const can=S.scrap>=C.roadCost;
+    const a=.14+.10*(Math.sin(S.t*5)+1)/2;   // 一時停止中も見えるよう、下限を残して脈打たせる
+    for(let y=y0;y<y1;y++) for(let x=x0;x<x1;x++){
+      if(inColony(x,y)||hasRoad(x,y)||hasJob(x,y)||oreAt(x,y)||!touches(x,y,true)) continue;
+      g.fillStyle = can ? `rgba(232,228,220,${a})` : `rgba(224,90,60,${a})`;
+      g.fillRect(x*T+3, y*T+3, T-6, T-6);
+      g.strokeStyle = can ? 'rgba(232,228,220,.55)' : 'rgba(224,90,60,.55)';
+      g.lineWidth=1;
+      g.strokeRect(x*T+3.5, y*T+3.5, T-7, T-7);
+    }
+  }
+
+  // ここから先はぜんぶコロニー内座標。原点を区画の左上へ移す
+  g.translate(BASE.x*T, BASE.y*T);
+
   // 廃墟。埋蔵量に比例して数が減る
-  const n = Math.min(RUBBLE.length, Math.ceil(S.deposit/3000*RUBBLE.length));
+  const n = Math.min(RUBBLE.length, Math.ceil(S.deposit/1000*RUBBLE.length));
   for(let i=0;i<n;i++){ const [x,y]=RUBBLE[i];
     blit(g, SP.rubble[(x*3+y)%SP.rubble.length], x*T, y*T); }
 
@@ -747,25 +911,35 @@ function drawMap(){
   const idlers = S.workers.filter(w=>w.at==='idle');
   const gap = Math.min(.8, 8.6/Math.max(idlers.length,1));
   idlers.forEach((w,i)=> man(g,w,.5+i*gap, IDLE_Y));
+  // 道普請中の住民は現地に立たせる(job は世界座標なのでコロニー座標に読み替える)
+  S.workers.filter(w=>w.at==='build'&&w.job).forEach(w=>
+    man(g,w, w.job[0]-BASE.x, w.job[1]-BASE.y-.1 + Math.sin(S.t*10)*.05));
   // 持ち場にいる人は描かない。何人で回しているかは下の 3/5 で出す。
-  // 着任中だけ歩かせる。eta をそのまま補間に使うので状態は増えない
+  // 着任中だけ歩かせる。eta をそのまま補間に使うので状態は増えない。
+  // 行き先は建物のほか、道普請の現地(build)と待機列への帰り(idle)がある
   S.workers.filter(w=>w.to).forEach((w,i)=>{
-    const p=1-w.eta/C.moveTime, [bx,by]=SITE[w.to];
-    const sx = .5+i*.5;                    // 出発点をずらす。揃えると全員が重なって1人に見える
-    const bob = Math.sin(S.t*7+bx)*.035;   // 歩幅に合わせて上下させる
-    man(g,w, sx+(bx-sx)*p, IDLE_Y+(by+.55-IDLE_Y)*p + bob);
+    const p=1-w.eta/C.moveTime, sx=.5+i*.5;   // 出発点をずらす。揃えると全員が重なって1人に見える
+    const bob = Math.sin(S.t*7+i)*.035;       // 歩幅に合わせて上下させる
+    let x0=sx, y0=IDLE_Y, x1, y1;
+    if(w.to==='build'){ x1=w.job[0]-BASE.x; y1=w.job[1]-BASE.y; }
+    else if(w.to==='idle'){
+      if(w.job){ x0=w.job[0]-BASE.x; y0=w.job[1]-BASE.y; }
+      x1=sx; y1=IDLE_Y;
+    }
+    else { const [bx,by]=SITE[w.to]; x1=bx; y1=by+.55; }
+    man(g,w, x0+(x1-x0)*p, y0+(y1-y0)*p + bob);
   });
 
   // 夜。明かりは暗くしたあとに乗せる
-  const nt=nightAmt(), W=M.cols*T, H=M.rows*T;
-  if(nt>0){ g.fillStyle=`rgba(14,20,45,${.52*nt})`; g.fillRect(0,0,W,H); }
+  const nt=nightAmt(), W=WORLD.cols*T, H=WORLD.rows*T;
+  if(nt>0){ g.fillStyle=`rgba(14,20,45,${.52*nt})`; g.fillRect(-BASE.x*T,-BASE.y*T,W,H); }
   if(!S.brown) DRAW.forEach(k=>{
     if(!active(k)) return;
     const [x,y]=SITE[k];
     lamp(g, x*T+T/2, y*T+T*.72, .2+.35*nt);
   });
   // 停電。明かりが消えたうえに、盤面全体が赤く沈む
-  if(S.brown){ g.fillStyle='rgba(150,36,18,.2)'; g.fillRect(0,0,W,H); }
+  if(S.brown){ g.fillStyle='rgba(150,36,18,.2)'; g.fillRect(-BASE.x*T,-BASE.y*T,W,H); }
 
   // 稼働人数。夜でも読めるよう、暗くしたあとに乗せる
   g.font = '600 15px '+MONO; g.textAlign='center'; g.textBaseline='middle';
@@ -933,8 +1107,8 @@ function draw(){
   setRate('qScrap',q.scrap);
   setText($('rParts'),String(Math.floor(S.parts)));
   setRate('qParts',q.parts);
-  setText($('rDep'),String(Math.floor(S.deposit)));
-  setRate('qDep',q.dep, S.deposit<=0 ? '枯渇' : undefined);
+  setText($('rDep'),String(Math.floor(minable())));   // 掘れる場所(廃墟+道が届いた鉱床)の合計
+  setRate('qDep',q.dep, minable()<=0 ? '枯渇' : undefined);
   setText($('idleN'),String(idle()));
   // 記号は持ち場の枠と同じものを使う。「この記号の人を、この記号の建物へ」で繋がる
   const chips = at('idle').map(w=>
@@ -968,10 +1142,58 @@ document.addEventListener('pointerdown', e=>{
     document.querySelectorAll('[data-sp]').forEach(b=>
       b.setAttribute('aria-pressed', String(+b.dataset.sp===speed))); }
   if(t.id==='repBtn'){ repair(); }
+  if(t.id==='roadBtn'){ roadMode=!roadMode; t.setAttribute('aria-pressed',String(roadMode));
+    $('map').style.cursor = roadMode?'crosshair':'grab'; }
   if(t.id==='wipeBtn'){ wipeTap(); }
   if(t.id==='playBtn'){ running=!running; t.textContent=running?'一時停止':'再開'; }
   draw();
 });
+
+// ============ 盤面のパンとズーム ============
+// 1本指ドラッグで移動、2本指の間隔で拡縮。一時停止中はループが描かないので自前で drawMap を呼ぶ
+{
+  const c=$('map'), pts=new Map();
+  let pz=1, pd=0;   // ピンチ開始時の倍率と指の間隔
+  const dist=()=>{ const [a,b]=[...pts.values()]; return Math.hypot(a.x-b.x,a.y-b.y); };
+  c.addEventListener('pointerdown',e=>{
+    c.setPointerCapture(e.pointerId);
+    pts.set(e.pointerId,{x:e.clientX,y:e.clientY,sx:e.clientX,sy:e.clientY});
+    if(pts.size===2){ pz=cam.z; pd=dist(); }
+  });
+  c.addEventListener('pointermove',e=>{
+    const p=pts.get(e.pointerId); if(!p) return;
+    if(pts.size===1){ cam.x-=(e.clientX-p.x)/cam.z; cam.y-=(e.clientY-p.y)/cam.z; }
+    p.x=e.clientX; p.y=e.clientY;
+    if(pts.size===2 && pd>0){
+      // 2本指の中点の下にある地点を止めたまま倍率だけ変える
+      const r=c.getBoundingClientRect(), [a,b]=[...pts.values()];
+      const mx=(a.x+b.x)/2-r.left, my=(a.y+b.y)/2-r.top;
+      const wx=cam.x+mx/cam.z, wy=cam.y+my/cam.z;
+      cam.z=pz*dist()/pd; clampCam();
+      cam.x=wx-mx/cam.z; cam.y=wy-my/cam.z;
+    }
+    clampCam(); drawMap();
+  });
+  c.addEventListener('pointerup',e=>{
+    const p=pts.get(e.pointerId);
+    // 指がほぼ動いていなければタップ。道モード中だけ意味を持つ
+    if(p && roadMode && pts.size===1 && Math.hypot(e.clientX-p.sx,e.clientY-p.sy)<8){
+      const r=c.getBoundingClientRect();
+      const wx=cam.x+(e.clientX-r.left)/cam.z, wy=cam.y+(e.clientY-r.top)/cam.z;
+      roadTap(Math.floor(wx/M.T), Math.floor(wy/M.T));
+      drawMap();
+    }
+    pts.delete(e.pointerId);
+  });
+  c.addEventListener('pointercancel',e=>pts.delete(e.pointerId));
+  c.addEventListener('wheel',e=>{   // PC で確かめる用
+    e.preventDefault();
+    const wx=cam.x+e.offsetX/cam.z, wy=cam.y+e.offsetY/cam.z;
+    cam.z*=e.deltaY<0?1.1:1/1.1; clampCam();
+    cam.x=wx-e.offsetX/cam.z; cam.y=wy-e.offsetY/cam.z;
+    clampCam(); drawMap();
+  },{passive:false});
+}
 
 // 壊れたセーブや、保存が禁じられた文脈(プライベート閲覧など)でも起動できるようにする
 try{ if(!load()) init(); }
@@ -979,7 +1201,9 @@ catch(e){ try{ localStorage.removeItem(KEY); }catch(_){} init(); }
 
 buildStatic();
 fitCanvas();
+homeCam();
 draw();
+addEventListener('resize',()=>{ fitCanvas(); drawMap(); });
 
 // ホーム画面から起動したときはオフラインでも動くようにする
 if('serviceWorker' in navigator){

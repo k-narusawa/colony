@@ -119,7 +119,7 @@ function run(seed) {
       const e = pool[Math.floor(rnd() * pool.length)];
       if (e === 'break') { S.broken = true; S.repairT = 0; }
       else if (e === 'cold') { S.cold = 3; S.coldLeft = 120; }
-      else if (e === 'ruin') S.deposit += 1200;
+      else if (e === 'ruin') {} // 本体では未接続の鉱床が湧くだけ。道を繋がない最悪ケースを床として測る
       else { S.pop += 2; S.workers.push(mk(), mk()); }
     }
   }
