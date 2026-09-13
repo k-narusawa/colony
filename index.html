@@ -217,6 +217,11 @@
 
   <canvas id="map" aria-label="コロニーの俯瞰図"></canvas>
 
+  <div class="alert info" id="bldPop" style="display:none">
+    <span><b id="bpName"></b> <span class="num" id="bpDesc"></span></span>
+    <button id="bpBtn"></button>
+  </div>
+
   <div id="alerts" aria-live="polite"></div>
 
   <div class="panel" id="powerPanel">
@@ -762,6 +767,7 @@ function roadTap(x,y){
 // 建物の移設。mvMode 中に建物をタップして選び、空き地をタップすると予約する。
 // 流れは道普請と同じで、待機者1人が現地で組み立てる。作業が始まってから完成まで建物は止まる
 let mvMode=false, mvSel=null;
+let popSel=null;   // 通常モードで盤面をタップして選んだ建物。強化バーの表示対象
 function canPlace(k,x,y){
   return FOOT(k).every(([dx,dy])=>{
     const nx=x+dx, ny=y+dy;
@@ -985,6 +991,15 @@ function drawMap(){
     }
   }
 
+  // 通常モードで選んだ建物。強化バーの対象を枠で示す
+  if(popSel && !mvMode && !roadMode){
+    const [x,y]=S.site[popSel];
+    g.setLineDash([6,4]);
+    g.strokeStyle='rgba(211,160,60,.95)'; g.lineWidth=2;
+    g.strokeRect(x*T+2, y*T+2, T-4, T-4);
+    g.setLineDash([]);
+  }
+
   // 移設モード。建物に枠を出し、選択中は置けるマスを見せる。判定は moveTap と同じ式
   if(mvMode){
     g.setLineDash([6,4]);
@@ -1161,6 +1176,19 @@ function drawUps(){
   });
 }
 
+function drawPop(){
+  const i = popSel ? UPS.findIndex(u=>u.k===popSel) : -1;
+  $('bldPop').style.display = i<0 ? 'none' : 'flex';
+  if(i<0) return;
+  const u=UPS[i];
+  setText($('bpName'), `${u.n} Lv${S.lv[u.k]}`);
+  setText($('bpDesc'), `強化で${u.d}`);
+  const btn=$('bpBtn');
+  setText(btn, `強化する(部品 ${u.cost})`);
+  btn.dataset.up=String(i);
+  setDis(btn, S.parts<u.cost);
+}
+
 function drawAlerts(){
   // 日没予告。人を動かすには moveTime かかるので、気づいた時点で間に合う必要がある
   const left=Math.ceil(toNext()), warn=!isNight() && left<=C.forecast;
@@ -1218,7 +1246,7 @@ function drawLog(){
 }
 
 function draw(){
-  drawMap(); drawBar(); drawBuildings(); drawUps(); drawAlerts();
+  drawMap(); drawBar(); drawBuildings(); drawUps(); drawAlerts(); drawPop();
   const q=rates();
   setText($('rPop'),`${S.pop}/${popCap()}`);
   setRate('qPop',0,popNote());
@@ -1270,8 +1298,8 @@ document.addEventListener('pointerdown', e=>{
       b.setAttribute('aria-pressed', String(+b.dataset.sp===speed))); }
   if(t.id==='repBtn'){ repair(); }
   // 道モードと移設モードは同時に立たない。カーソルと押下表示もここで揃える
-  if(t.id==='roadBtn'){ roadMode=!roadMode; mvMode=false; mvSel=null; syncModes(); }
-  if(t.id==='mvBtn'){ mvMode=!mvMode; mvSel=null; roadMode=false; syncModes(); }
+  if(t.id==='roadBtn'){ roadMode=!roadMode; mvMode=false; mvSel=null; popSel=null; syncModes(); }
+  if(t.id==='mvBtn'){ mvMode=!mvMode; mvSel=null; roadMode=false; popSel=null; syncModes(); }
   if(t.id==='wipeBtn'){ wipeTap(); }
   if(t.id==='playBtn'){ running=!running; t.textContent=running?'一時停止':'再開'; }
   draw();
@@ -1305,11 +1333,13 @@ document.addEventListener('pointerdown', e=>{
   c.addEventListener('pointerup',e=>{
     const p=pts.get(e.pointerId);
     // 指がほぼ動いていなければタップ。道モードか移設モード中だけ意味を持つ
-    if(p && (roadMode||mvMode) && pts.size===1 && Math.hypot(e.clientX-p.sx,e.clientY-p.sy)<8){
+    if(p && pts.size===1 && Math.hypot(e.clientX-p.sx,e.clientY-p.sy)<8){
       const r=c.getBoundingClientRect();
       const wx=cam.x+(e.clientX-r.left)/cam.z, wy=cam.y+(e.clientY-r.top)/cam.z;
       const tx=Math.floor(wx/M.T), ty=Math.floor(wy/M.T);
-      if(roadMode) roadTap(tx,ty); else moveTap(tx,ty);
+      if(roadMode) roadTap(tx,ty);
+      else if(mvMode) moveTap(tx,ty);
+      else { const b=bldAt(tx,ty); popSel = b===popSel ? null : b; drawPop(); }
       drawMap();
     }
     pts.delete(e.pointerId);
