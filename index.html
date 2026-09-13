@@ -203,7 +203,7 @@
     <button data-sp="1" aria-pressed="false">等速</button>
     <button data-sp="2" aria-pressed="true">2倍速</button>
     <button data-sp="4" aria-pressed="false">4倍速</button>
-    <button id="roadBtn" aria-pressed="false">道を敷く <svg class="ic"><use href="#i-scrap"/></svg>10</button>
+    <button id="roadBtn" aria-pressed="false">道を敷く <svg class="ic"><use href="#i-scrap"/></svg>10<small>/</small><svg class="ic"><use href="#i-parts"/></svg>5</button>
     <button id="wipeBtn" class="wipe">やり直す</button>
   </div>
 
@@ -287,6 +287,7 @@ const C = {
   sessionSec:600,     // バランス確認の観測窓。balance-check.js だけが使う
 
   roadCost:10,        // 道1マスに要るスクラップ
+  roadCostParts:5,    // スクラップ切れのときの代替。scrapPerPart 換算で等価
   roadBuildT:15,      // 1マスの敷設にかかる作業秒数(行き帰りは moveTime)
   oreInit:3, oreMin:800, oreVar:800, oreEvent:1200,   // 鉱床の初期数と埋蔵量
 
@@ -669,16 +670,21 @@ function roadTap(x,y){
   if(x<0||y<0||x>=WORLD.cols||y>=WORLD.rows) return;
   const j=S.jobs.find(j=>j.x===x&&j.y===y);
   if(j){   // 予約をもう一度タップで取り消し。返金して、向かった住民は引き返す
-    S.scrap+=C.roadCost; S.jobs.splice(S.jobs.indexOf(j),1);
+    if(j.pay==='parts') S.parts+=C.roadCostParts; else S.scrap+=C.roadCost;
+    S.jobs.splice(S.jobs.indexOf(j),1);
     const w=S.workers.find(w=>w.job&&w.job[0]===x&&w.job[1]===y&&(w.at==='build'||w.to==='build'));
     if(w){ w.eta = w.at==='build' ? C.moveTime : Math.max(.1, C.moveTime-w.eta);
            w.at='moving'; w.to='idle'; }
     return;
   }
   if(inColony(x,y) || hasRoad(x,y) || oreAt(x,y)) return;   // 置けない場所は黙って無視
-  if(!touches(x,y,true) || S.scrap<C.roadCost) return;
-  S.scrap-=C.roadCost;
-  S.jobs.push({x,y,left:C.roadBuildT});
+  if(!touches(x,y,true)) return;
+  // スクラップ優先で支払い、足りなければ部品で代用(部品はスクラップより貴重)
+  let pay;
+  if(S.scrap>=C.roadCost){ S.scrap-=C.roadCost; pay='scrap'; }
+  else if(S.parts>=C.roadCostParts){ S.parts-=C.roadCostParts; pay='parts'; }
+  else return;
+  S.jobs.push({x,y,left:C.roadBuildT,pay});
 }
 
 // ============ DOMを一度だけ組む ============
@@ -884,7 +890,7 @@ function drawMap(){
     g.strokeStyle='rgba(211,160,60,.9)'; g.lineWidth=2; g.setLineDash([8,6]);
     g.strokeRect(BASE.x*T+1, BASE.y*T+1, BASE.cols*T-2, BASE.rows*T-2);
     g.setLineDash([]);
-    const can=S.scrap>=C.roadCost;
+    const can=S.scrap>=C.roadCost || S.parts>=C.roadCostParts;
     const a=.14+.10*(Math.sin(S.t*5)+1)/2;   // 一時停止中も見えるよう、下限を残して脈打たせる
     for(let y=y0;y<y1;y++) for(let x=x0;x<x1;x++){
       if(inColony(x,y)||hasRoad(x,y)||hasJob(x,y)||oreAt(x,y)||!touches(x,y,true)) continue;
