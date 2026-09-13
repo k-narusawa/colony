@@ -146,11 +146,18 @@
   }
 
   /* --- 俯瞰図 --- */
-  /* 見えているのは 24×16 の世界の一部。枠の比率だけ固定し、中はカメラで動かす */
-  #map{display:block;width:100%;max-width:768px;aspect-ratio:8/5;margin:0 auto 12px;
+  /* 見えているのは 24×16 の世界の一部。枠は画面に合わせて伸ばし、中はカメラで動かす */
+  #map{display:block;width:100%;height:70vh;height:70dvh;margin:0 auto 12px;
        image-rendering:pixelated;                 /* ドット絵をぼかさない */
        touch-action:none;                         /* ドラッグをページスクロールに渡さない */
        border:1px solid var(--line);background:#a4553a;cursor:grab}
+  /* スマホでは余白を打ち消して端まで広げ、画面の高さいっぱいに映す */
+  @media(max-width:759px){
+    #map{width:calc(100% + 28px + env(safe-area-inset-left) + env(safe-area-inset-right));
+         height:100vh;height:100dvh;
+         margin-left:calc(-14px - env(safe-area-inset-left));
+         margin-right:calc(-14px - env(safe-area-inset-right))}
+  }
   /* --- 記号 --- */
   /* currentColor に乗せてあるので、既存の色指定がそのまま効く */
   .ic{width:1em;height:1em;vertical-align:-.14em;fill:none;stroke:currentColor;
