@@ -11,7 +11,8 @@
 | `offline-check.js` | 留守にしたぶんの計算を確かめる。`node offline-check.js` |
 | `manifest.json` | ホーム画面に追加するための設定 |
 | `sw.js` | オフライン起動用。更新時は `CACHE` の数字を上げる |
-| `assets/tiles.png` | 俯瞰図の絵。Kenney「Sci-Fi RTS」(CC0)。この1枚に地形も建物も住民も入っている |
+| `assets/tiles.png` | 建物・岩・住民の絵。Kenney「Sci-Fi RTS」(CC0) |
+| `assets/ground.png` | 地面と小石・枯れ草。LudicArts「Free Desert Top-Down Tileset」(CC-BY 3.0、`assets/LUDICARTS-LICENSE.txt`)を赤茶に色変えして 128px に縮めたもの |
 | `docs/asset-plan.md` | タイルの座標と、盤面の決めごと。絵を差し替える前に読むこと |
 | `icon-*.png` | アイコン。`icon.py` で再生成できる |
 

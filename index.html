@@ -853,16 +853,27 @@ const M = { T:64, SRC:128, dpr:1, vw:0, vh:0 };
 // カメラ。x,y は表示左上の世界座標(px)、z は倍率。揮発でよいのでセーブしない
 const cam = { x:0, y:0, z:1 };
 const MONO = 'ui-monospace,SFMono-Regular,Menlo,monospace';
-const SHEET = new Image();
-let sheetOK = false;
-SHEET.onload = () => { sheetOK = true; drawMap(); };
+// 建物・岩・人型は Kenney、地面だけ LudicArts の手描きタイル。両方揃ってから描く
+const SHEET = new Image(), GROUND = new Image();
+let sheetOK = false, loaded = 0, groundPat = null;
+SHEET.onload = GROUND.onload = () => { if(++loaded===2){ groundPat = makeGround(); sheetOK = true; drawMap(); } };
 SHEET.src = './assets/tiles.png';
+GROUND.src = './assets/ground.png';
+
+// 地面は GROUND の左端 1 枚(継ぎ目なし)を敷き詰めたパターン。
+// マスごとに drawImage すると倍率が端数のとき境目に線が出るので、1回の塗りで済ませる
+function makeGround(){
+  const c=document.createElement('canvas'); c.width=c.height=M.SRC;
+  c.getContext('2d').drawImage(GROUND,0,0);
+  const p=$('map').getContext('2d').createPattern(c,'repeat');
+  p.setTransform(new DOMMatrix().scale(M.T/M.SRC));
+  return p;
+}
 
 const SP = {
-  ground:[[0,0],[0,1]],
   // 廃墟は灰色の岩。赤い岩(4行目)だと地面と同系色で沈む
   rubble:[[5,2],[5,3],[5,4],[5,5]],
-  speck:[[5,0],[4,0]],                          // 地面に散らす小石。建物の下に隠れてよい
+  speck:[[0,1],[0,2]],                          // GROUND。地面に散らす小石と枯れ草。建物の下に隠れてよい
   gen:[1,14], scrap:[1,15], shop:[2,15], farm:[2,17], house:[0,17],
   man:{ gen:[3,8], scrap:[4,8], shop:[5,8] },   // 得意分野で色が変わる
 };
@@ -907,10 +918,17 @@ function homeCam(){
   clampCam();
 }
 
-function blit(g,[r,c],dx,dy){
-  g.drawImage(SHEET, c*M.SRC, r*M.SRC, M.SRC, M.SRC, dx, dy, M.T, M.T);
+function blit(g,[r,c],dx,dy,img=SHEET){
+  g.drawImage(img, c*M.SRC, r*M.SRC, M.SRC, M.SRC, dx, dy, M.T, M.T);
 }
-const man = (g,w,tx,ty) => blit(g, SP.man[w.spec], tx*M.T, ty*M.T);
+// 落ち影つき。canvas の影は絵の透明部分に出ないので輪郭どおりの影になる。
+// 影のずれ幅と暈しは変換行列の影響を受けないので、倍率ぶん自分で掛ける
+function sprite(g,sp,dx,dy){
+  g.shadowColor='rgba(30,12,4,.5)'; g.shadowBlur=5*M.sc; g.shadowOffsetX=3*M.sc; g.shadowOffsetY=5*M.sc;
+  blit(g,sp,dx,dy);
+  g.shadowColor='transparent';
+}
+const man = (g,w,tx,ty) => sprite(g, SP.man[w.spec], tx*M.T, ty*M.T);
 
 function lamp(g,x,y,a){
   const r=30, grd=g.createRadialGradient(x,y,0,x,y,r);
@@ -953,7 +971,7 @@ function nightAmt(){
 
 function drawMap(){
   const c=$('map'); if(!c || !sheetOK) return;
-  const g=c.getContext('2d'), T=M.T, sc=M.dpr*cam.z;
+  const g=c.getContext('2d'), T=M.T, sc=M.sc=M.dpr*cam.z;
   g.setTransform(sc,0,0,sc,-cam.x*sc,-cam.y*sc);
   g.imageSmoothingEnabled = false;   // バッファのリサイズで消えるので毎回入れる
   g.clearRect(cam.x,cam.y,M.vw/cam.z,M.vh/cam.z);
@@ -962,15 +980,14 @@ function drawMap(){
   // 画面に入る範囲だけ敷く(世界全体だと毎フレーム 384 マスになる)
   const x0=Math.max(0,Math.floor(cam.x/T)), x1=Math.min(WORLD.cols,Math.ceil((cam.x+M.vw/cam.z)/T));
   const y0=Math.max(0,Math.floor(cam.y/T)), y1=Math.min(WORLD.rows,Math.ceil((cam.y+M.vh/cam.z)/T));
-  for(let y=y0;y<y1;y++) for(let x=x0;x<x1;x++){
-    blit(g, SP.ground[(x*7+y*13)%5===0?1:0], x*T, y*T);
-    if((x*13+y*29)%5===0) blit(g, SP.speck[(x+y)%SP.speck.length], x*T, y*T);
-  }
+  g.fillStyle=groundPat; g.fillRect(x0*T, y0*T, (x1-x0)*T, (y1-y0)*T);
+  for(let y=y0;y<y1;y++) for(let x=x0;x<x1;x++)
+    if((x*13+y*29)%7===0) blit(g, SP.speck[(x+y)%SP.speck.length], x*T, y*T, GROUND);
 
   // 道と、その予定地(薄く)。鉱床は残りが多いほど大きな岩で、掘り尽くすと消える
   drawRoads(g,S.roads,T);
   g.globalAlpha=.45; drawRoads(g,S.jobs.map(j=>[j.x,j.y]),T); g.globalAlpha=1;
-  S.ores.forEach(o=> blit(g, SP.rubble[Math.min(3, Math.floor(o.amt/500))], o.x*T, o.y*T));
+  S.ores.forEach(o=> sprite(g, SP.rubble[Math.min(3, Math.floor(o.amt/500))], o.x*T, o.y*T));
 
   // 道モード中は、コロニー区画の枠と「いま置けるマス」を見せる。
   // タップが黙って無視されるのを減らす案内で、判定は roadTap と同じ式。
@@ -1024,7 +1041,7 @@ function drawMap(){
   // 廃墟。埋蔵量に比例して数が減る(置き場はコロニー内座標)
   const n = Math.min(RUBBLE.length, Math.ceil(S.deposit/1000*RUBBLE.length));
   for(let i=0;i<n;i++){ const [x,y]=RUBBLE[i];
-    blit(g, SP.rubble[(x*3+y)%SP.rubble.length], (BASE.x+x)*T, (BASE.y+y)*T); }
+    sprite(g, SP.rubble[(x*3+y)%SP.rubble.length], (BASE.x+x)*T, (BASE.y+y)*T); }
 
   // 建物と、レベルぶんの増築。止まっている区画は上から沈める。
   // globalAlpha で建物だけ薄くすると地面が透けて濁るので、区画ごと暗くする
@@ -1033,7 +1050,7 @@ function drawMap(){
     [[[0,0], SP[k]], ...(ANNEX[k]||[]).slice(0, S.lv[k]-1).map(a=>[a.at, a.sp])]
       .forEach(([[dx,dy],sp])=>{
         const x=bx+dx, y=by+dy;
-        blit(g, sp, x*T, y*T);
+        sprite(g, sp, x*T, y*T);
         if(!on){ g.fillStyle='rgba(16,14,28,.42)'; g.fillRect(x*T,y*T,T,T); }
       });
   });
